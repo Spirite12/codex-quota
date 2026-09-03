@@ -39,13 +39,19 @@ internal static class Program
 
         while (true)
         {
-            if (IsCodexDesktopRunning())
+            try
             {
-                EnsureCompanionStarted(companionPath, installRoot.FullName);
+                if (IsCodexDesktopRunning())
+                {
+                    EnsureCompanionStarted(companionPath, installRoot.FullName);
+                }
+                else
+                {
+                    StopCompanions(installRoot.FullName);
+                }
             }
-            else
+            catch
             {
-                StopCompanions(installRoot.FullName);
             }
 
             await Task.Delay(PollMilliseconds);
