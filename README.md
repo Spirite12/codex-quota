@@ -20,16 +20,6 @@ Codex 额度查询工具 / Read-only Codex quota monitor for Windows。
 - 需要安装 Microsoft .NET 10 Desktop Runtime。
 - 如果需要生成安装包，则 `build-codex-quota.exe` 还需要本机安装 .NET SDK，因为它会调用 `dotnet` 生成安装包。
 
-## 下载与安装
-
-1. 安装 Microsoft .NET 10 Desktop Runtime。
-2. 从 GitHub Releases 下载 `codex-quota.exe`。
-3. 运行安装包并按提示选择安装路径。
-
-当前版本：[下载 v0.2.0 安装包](https://github.com/Spirite12/codex-quota/releases/download/v0.2.0/codex-quota.exe)。
-
-普通用户不需要安装 .NET SDK；只有从源码构建安装包时才需要。
-
 ## 安全边界
 
 - 仅在活动且可见的 ChatGPT Desktop 窗口、Codex 运行时和已登录账号同时存在时显示并读取；窗口关闭、最小化、切换应用或认证不可用时停止读取并隐藏，恢复后重试。
