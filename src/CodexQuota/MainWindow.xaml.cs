@@ -8,7 +8,10 @@ namespace CodexQuota;
 
 public partial class MainWindow : Window
 {
-    private const int ApprovalGapPixels = 30;
+    private const int HostConfirmationSamples = 2;
+    private const double ComposerQuotaLeftOffsetDip = 151;
+    private const double ComposerBottomGapDip = 3;
+    private const double PlusQuotaLeftOffsetDip = 143;
     private const double VerticalNudgeDip = 2;
     private readonly DispatcherTimer _hostTimer = new();
     private readonly DispatcherTimer _fallbackRefreshTimer = new();
@@ -16,8 +19,9 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private AppSettings _settings = AppSettings.Default;
     private CodexAppServerClient? _client;
-    private HostBounds? _lastHostBounds;
-    private int? _lastApprovalRightPixels;
+    private bool _hasQuotaSnapshot;
+    private int _visibleHostSamples;
+    private int _missingHostSamples;
     private bool _closing;
 
     public MainWindow()
@@ -69,24 +73,47 @@ public partial class MainWindow : Window
 
             if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
             {
-                _lastHostBounds = null;
-                _lastApprovalRightPixels = null;
-                await SuspendAndWaitAsync();
+                _visibleHostSamples = 0;
+                _missingHostSamples = Math.Min(_missingHostSamples + 1, HostConfirmationSamples);
+                _fallbackRefreshTimer.Stop();
+                Opacity = 0;
+
+                if (_missingHostSamples >= HostConfirmationSamples)
+                {
+                    await SuspendAndWaitAsync();
+                }
+
                 return;
             }
 
-            hostBounds = StabilizeHostBounds(hostBounds);
+            _missingHostSamples = 0;
+            _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
+            PositionAgainstHost(hostBounds);
+
+            if (_visibleHostSamples < HostConfirmationSamples)
+            {
+                Opacity = 0;
+                return;
+            }
+
             if (!IsVisible)
             {
                 Opacity = 0;
                 Show();
             }
 
-            _lastHostBounds = hostBounds;
-            PositionAgainstHost(hostBounds);
+            if (_hasQuotaSnapshot)
+            {
+                Opacity = 1;
+            }
 
             if (_client is not null)
             {
+                if (!_fallbackRefreshTimer.IsEnabled)
+                {
+                    _fallbackRefreshTimer.Start();
+                }
+
                 return;
             }
 
@@ -155,8 +182,10 @@ public partial class MainWindow : Window
         try
         {
             var client = _client;
-            if (_closing || client is null)
+            if (_closing || client is null || _visibleHostSamples < HostConfirmationSamples ||
+                !CodexHost.TryFindVisibleHostWindow(out _))
             {
+                Opacity = 0;
                 return;
             }
 
@@ -181,16 +210,16 @@ public partial class MainWindow : Window
         ChipGapColumn.Width = fiveHour is null ? new GridLength(0) : new GridLength(6);
         System.Windows.Controls.Grid.SetColumn(WeekChip, fiveHour is null ? 0 : 2);
         SetChip(WeekValue, WeekDot, quotas.Week);
+        _hasQuotaSnapshot = true;
 
         UpdateLayout();
-        if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
+        if (_visibleHostSamples < HostConfirmationSamples ||
+            !CodexHost.TryFindVisibleHostWindow(out var hostBounds))
         {
             Opacity = 0;
             return;
         }
 
-        hostBounds = StabilizeHostBounds(hostBounds);
-        _lastHostBounds = hostBounds;
         PositionAgainstHost(hostBounds);
         Opacity = 1;
     }
@@ -222,33 +251,35 @@ public partial class MainWindow : Window
         var hostBottomLeft = DeviceToDip(hostBounds.Left, hostBounds.Bottom);
         var hostBottomRight = DeviceToDip(hostBounds.Right, hostBounds.Bottom);
         var targetLeft = hostBottomLeft.X + ((hostBottomRight.X - hostBottomLeft.X - Width) / 2);
-        if (hostBounds.ApprovalRight is { } approvalRightPixels)
+        var minLeft = hostBottomLeft.X;
+        var maxLeft = hostBottomRight.X - Width;
+
+        if (hostBounds.ComposerRectPixels is { } composerRect)
         {
-            targetLeft = DeviceToDip(approvalRightPixels + ApprovalGapPixels, hostBounds.Bottom).X;
+            var composerLeft = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).X;
+            var composerRight = DeviceToDip((int)Math.Round(composerRect.Right), (int)Math.Round(composerRect.Bottom)).X;
+            targetLeft = composerLeft + ComposerQuotaLeftOffsetDip;
+            minLeft = composerLeft;
+            maxLeft = composerRight - Width;
+
+            var composerBottom = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).Y;
+            Top = composerBottom - Height - ComposerBottomGapDip;
+        }
+        else if (hostBounds.PlusRectPixels is { } plusRect)
+        {
+            var plusLeft = DeviceToDip((int)Math.Round(plusRect.Left), (int)Math.Round(plusRect.Top)).X;
+            targetLeft = plusLeft + PlusQuotaLeftOffsetDip;
+            var plusCenter = DeviceToDip(
+                (int)Math.Round((plusRect.Left + plusRect.Right) / 2),
+                (int)Math.Round((plusRect.Top + plusRect.Bottom) / 2)).Y;
+            Top = plusCenter - (Height / 2);
+        }
+        else
+        {
+            Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
         }
 
-        Left = Math.Min(targetLeft, hostBottomRight.X - Width);
-        Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
-    }
-
-    private HostBounds StabilizeHostBounds(HostBounds hostBounds)
-    {
-        if (hostBounds.ApprovalRight is { } approvalRight)
-        {
-            _lastApprovalRightPixels = approvalRight;
-            return hostBounds;
-        }
-
-        if (_lastApprovalRightPixels is not { } previousApprovalRight || _lastHostBounds is not { } previousHostBounds)
-        {
-            return hostBounds;
-        }
-
-        var hostDeltaX = hostBounds.Left - previousHostBounds.Left;
-        return hostBounds with
-        {
-            ApprovalRight = previousApprovalRight + hostDeltaX
-        };
+        Left = Math.Clamp(targetLeft, minLeft, maxLeft);
     }
 
     private Point DeviceToDip(int x, int y)
@@ -282,8 +313,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        hostBounds = StabilizeHostBounds(hostBounds);
-        _lastHostBounds = hostBounds;
         PositionAgainstHost(hostBounds);
     }
 
@@ -302,6 +331,9 @@ public partial class MainWindow : Window
             await DisposeClientQuietlyAsync(client);
         }
 
+        _visibleHostSamples = 0;
+        _missingHostSamples = 0;
+        _hasQuotaSnapshot = false;
         Opacity = 0;
         Hide();
     }
