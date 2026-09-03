@@ -1,0 +1,19 @@
+# .NET build outputs
+**/bin/
+**/obj/
+
+# Generated package and runtime outputs
+/build/
+/runtime/
+/schemas/
+*.exe
+*.dll
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+/logs/
+
+# Local IDE files
+.vs/
+*.user
+*.suo
