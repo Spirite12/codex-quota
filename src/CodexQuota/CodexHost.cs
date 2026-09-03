@@ -10,6 +10,8 @@ namespace CodexQuota;
 internal readonly record struct HostBounds(int Left, int Top, int Right, int Bottom)
 {
     public int? ApprovalRight { get; init; }
+    public int? ComposerBottomPixels { get; init; }
+    public int? PlusCenterYPixels { get; init; }
 
     public long Area => (long)Math.Max(0, Right - Left) * Math.Max(0, Bottom - Top);
 }
@@ -147,10 +149,15 @@ internal static class CodexHost
             bounds = activeCandidate.Bounds;
             TryFindCodexLayout(
                 activeCandidate.Handle,
-                out var approvalRight);
+                activeCandidate.Bounds,
+                out var approvalRight,
+                out var composerBottomPixels,
+                out var plusCenterYPixels);
             bounds = bounds with
             {
-                ApprovalRight = approvalRight
+                ApprovalRight = approvalRight,
+                ComposerBottomPixels = composerBottomPixels,
+                PlusCenterYPixels = plusCenterYPixels
             };
 
             return true;
@@ -162,9 +169,14 @@ internal static class CodexHost
 
     private static void TryFindCodexLayout(
         nint hostHandle,
-        out int? approvalRight)
+        HostBounds hostBounds,
+        out int? approvalRight,
+        out int? composerBottomPixels,
+        out int? plusCenterYPixels)
     {
         approvalRight = null;
+        composerBottomPixels = null;
+        plusCenterYPixels = null;
 
         try
         {
@@ -193,6 +205,54 @@ internal static class CodexHost
             {
                 approvalRight = (int)Math.Round(approval.Rect.Right);
             }
+
+            var editCondition = new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.Edit);
+            var editCandidates = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, editCondition));
+            var edit = editCandidates
+                .Where(candidate =>
+                    candidate.Rect.Width >= 240 &&
+                    candidate.Rect.Left >= hostBounds.Left &&
+                    candidate.Rect.Right <= hostBounds.Right + 40 &&
+                    candidate.Rect.Bottom >= hostBounds.Bottom - 300 &&
+                    candidate.Rect.Bottom <= hostBounds.Bottom + 20)
+                .OrderByDescending(candidate => candidate.ClassName.Contains("ProseMirror", StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(candidate => candidate.Rect.Width)
+                .ThenByDescending(candidate => candidate.Rect.Bottom)
+                .FirstOrDefault();
+
+            if (edit.Element is not null && TryFindComposerContainer(
+                    edit.Element,
+                    edit.Rect,
+                    hostBounds,
+                    out var composerRect))
+            {
+                composerBottomPixels = (int)Math.Round(composerRect.Bottom);
+            }
+
+            var buttonCondition = new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.Button);
+            var buttonCandidates = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, buttonCondition));
+            var bottomReference = composerBottomPixels ?? hostBounds.Bottom;
+            var plus = buttonCandidates
+                .Where(candidate =>
+                    candidate.Rect.Width is >= 20 and <= 48 &&
+                    candidate.Rect.Height is >= 20 and <= 48 &&
+                    candidate.Rect.Left >= hostBounds.Left &&
+                    candidate.Rect.Right <= hostBounds.Right + 20 &&
+                    candidate.Rect.Bottom >= bottomReference - 100 &&
+                    candidate.Rect.Bottom <= hostBounds.Bottom + 20)
+                .OrderByDescending(candidate => IsAddFilesButton(candidate.Name))
+                .ThenBy(candidate => candidate.Rect.Left)
+                .ThenByDescending(candidate => candidate.Rect.Bottom)
+                .FirstOrDefault();
+
+            if (plus.Element is not null)
+            {
+                plusCenterYPixels = (int)Math.Round((plus.Rect.Top + plus.Rect.Bottom) / 2);
+            }
         }
         catch (ElementNotAvailableException)
         {
@@ -204,6 +264,99 @@ internal static class CodexHost
         {
         }
     }
+
+    private static List<AutomationSnapshot> ReadAutomationSnapshots(AutomationElementCollection elements)
+    {
+        var snapshots = new List<AutomationSnapshot>(elements.Count);
+        foreach (AutomationElement element in elements)
+        {
+            try
+            {
+                var current = element.Current;
+                var rect = current.BoundingRectangle;
+                if (!current.IsOffscreen && rect.Width > 0 && rect.Height > 0)
+                {
+                    snapshots.Add(new AutomationSnapshot(
+                        element,
+                        rect,
+                        current.Name,
+                        current.ClassName));
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+            catch (COMException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        return snapshots;
+    }
+
+    private static bool TryFindComposerContainer(
+        AutomationElement edit,
+        Rect editRect,
+        HostBounds hostBounds,
+        out Rect composerRect)
+    {
+        var walker = TreeWalker.RawViewWalker;
+        var current = walker.GetParent(edit);
+        for (var level = 0; level < 8 && current is not null; level++)
+        {
+            try
+            {
+                var snapshot = current.Current;
+                var rect = snapshot.BoundingRectangle;
+                if (!snapshot.IsOffscreen &&
+                    rect.Width > editRect.Width + 16 &&
+                    rect.Width <= editRect.Width + 240 &&
+                    rect.Height > editRect.Height + 30 &&
+                    rect.Height <= 260 &&
+                    rect.Left <= editRect.Left &&
+                    rect.Right >= editRect.Right &&
+                    rect.Bottom >= hostBounds.Bottom - 300 &&
+                    rect.Bottom <= hostBounds.Bottom + 20)
+                {
+                    composerRect = rect;
+                    return true;
+                }
+
+                current = walker.GetParent(current);
+            }
+            catch (ElementNotAvailableException)
+            {
+                break;
+            }
+            catch (COMException)
+            {
+                break;
+            }
+            catch (InvalidOperationException)
+            {
+                break;
+            }
+        }
+
+        composerRect = default;
+        return false;
+    }
+
+    private static bool IsAddFilesButton(string name)
+    {
+        return name.Contains("添加文件", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("add files", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("attach", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private readonly record struct AutomationSnapshot(
+        AutomationElement? Element,
+        Rect Rect,
+        string Name,
+        string ClassName);
 
     private delegate bool EnumWindowsProc(nint windowHandle, nint parameter);
 

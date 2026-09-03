@@ -10,6 +10,7 @@ public partial class MainWindow : Window
 {
     private const int ApprovalGapPixels = 30;
     private const int HostConfirmationSamples = 2;
+    private const double ComposerBottomGapDip = 3;
     private const double VerticalNudgeDip = 2;
     private readonly DispatcherTimer _hostTimer = new();
     private readonly DispatcherTimer _fallbackRefreshTimer = new();
@@ -263,6 +264,21 @@ public partial class MainWindow : Window
         }
 
         Left = Math.Min(targetLeft, hostBottomRight.X - Width);
+
+        if (hostBounds.ComposerBottomPixels is { } composerBottomPixels)
+        {
+            var composerBottom = DeviceToDip(0, composerBottomPixels).Y;
+            Top = composerBottom - Height - ComposerBottomGapDip;
+            return;
+        }
+
+        if (hostBounds.PlusCenterYPixels is { } plusCenterYPixels)
+        {
+            var plusCenter = DeviceToDip(0, plusCenterYPixels).Y;
+            Top = plusCenter - (Height / 2);
+            return;
+        }
+
         Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
     }
 
