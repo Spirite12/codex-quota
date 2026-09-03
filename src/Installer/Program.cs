@@ -221,14 +221,26 @@ internal static class Program
             "/TR",
             $"\"{launcherPath}\"",
             "/F");
-        if (result.ExitCode == 0)
+        if (result.ExitCode != 0)
         {
-            error = string.Empty;
-            return true;
+            error = $"Unable to create the Codex startup task.\n\n{FormatProcessOutput(result)}";
+            return false;
         }
 
-        error = $"Unable to create the Codex startup task.\n\n{FormatProcessOutput(result)}";
-        return false;
+        var powerSettings = RunPowerShell(
+            "$task = Get-ScheduledTask -TaskName 'CodexQuota-OnCodexStart'; " +
+            "$settings = $task.Settings; " +
+            "$settings.DisallowStartIfOnBatteries = $false; " +
+            "$settings.StopIfGoingOnBatteries = $false; " +
+            "Set-ScheduledTask -TaskName 'CodexQuota-OnCodexStart' -Settings $settings");
+        if (powerSettings.ExitCode != 0)
+        {
+            error = $"Unable to configure the Codex startup task for battery operation.\n\n{FormatProcessOutput(powerSettings)}";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     private static bool IsExistingInstallation(string installRoot)
@@ -337,6 +349,35 @@ internal static class Program
         if (process is null)
         {
             return new ProcessResult(-1, string.Empty, "Unable to start schtasks.exe");
+        }
+
+        var standardOutput = process.StandardOutput.ReadToEnd();
+        var standardError = process.StandardError.ReadToEnd();
+        process.WaitForExit(5000);
+        return new ProcessResult(process.HasExited ? process.ExitCode : -1, standardOutput, standardError);
+    }
+
+    private static ProcessResult RunPowerShell(string command)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(command);
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return new ProcessResult(-1, string.Empty, "Unable to start powershell.exe");
         }
 
         var standardOutput = process.StandardOutput.ReadToEnd();
