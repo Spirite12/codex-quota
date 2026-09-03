@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private CodexAppServerClient? _client;
     private HostBounds? _lastHostBounds;
     private int? _lastApprovalRightPixels;
+    private bool _hasQuotaSnapshot;
     private bool _closing;
 
     public MainWindow()
@@ -80,6 +81,11 @@ public partial class MainWindow : Window
             {
                 Opacity = 0;
                 Show();
+            }
+
+            if (_hasQuotaSnapshot)
+            {
+                Opacity = 1;
             }
 
             _lastHostBounds = hostBounds;
@@ -181,6 +187,7 @@ public partial class MainWindow : Window
         ChipGapColumn.Width = fiveHour is null ? new GridLength(0) : new GridLength(6);
         System.Windows.Controls.Grid.SetColumn(WeekChip, fiveHour is null ? 0 : 2);
         SetChip(WeekValue, WeekDot, quotas.Week);
+        _hasQuotaSnapshot = true;
 
         UpdateLayout();
         if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
@@ -302,6 +309,7 @@ public partial class MainWindow : Window
             await DisposeClientQuietlyAsync(client);
         }
 
+        _hasQuotaSnapshot = false;
         Opacity = 0;
         Hide();
     }
