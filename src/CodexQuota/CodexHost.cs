@@ -9,9 +9,8 @@ namespace CodexQuota;
 
 internal readonly record struct HostBounds(int Left, int Top, int Right, int Bottom)
 {
-    public int? ApprovalRight { get; init; }
-    public int? ComposerBottomPixels { get; init; }
-    public int? PlusCenterYPixels { get; init; }
+    public Rect? ComposerRectPixels { get; init; }
+    public Rect? PlusRectPixels { get; init; }
 
     public long Area => (long)Math.Max(0, Right - Left) * Math.Max(0, Bottom - Top);
 }
@@ -150,14 +149,12 @@ internal static class CodexHost
             TryFindCodexLayout(
                 activeCandidate.Handle,
                 activeCandidate.Bounds,
-                out var approvalRight,
-                out var composerBottomPixels,
-                out var plusCenterYPixels);
+                out var composerRectPixels,
+                out var plusRectPixels);
             bounds = bounds with
             {
-                ApprovalRight = approvalRight,
-                ComposerBottomPixels = composerBottomPixels,
-                PlusCenterYPixels = plusCenterYPixels
+                ComposerRectPixels = composerRectPixels,
+                PlusRectPixels = plusRectPixels
             };
 
             return true;
@@ -170,41 +167,15 @@ internal static class CodexHost
     private static void TryFindCodexLayout(
         nint hostHandle,
         HostBounds hostBounds,
-        out int? approvalRight,
-        out int? composerBottomPixels,
-        out int? plusCenterYPixels)
+        out Rect? composerRectPixels,
+        out Rect? plusRectPixels)
     {
-        approvalRight = null;
-        composerBottomPixels = null;
-        plusCenterYPixels = null;
+        composerRectPixels = null;
+        plusRectPixels = null;
 
         try
         {
             var root = AutomationElement.FromHandle(hostHandle);
-
-            var textCondition = new PropertyCondition(
-                AutomationElement.ControlTypeProperty,
-                ControlType.Text);
-            var approval = root.FindAll(TreeScope.Descendants, textCondition)
-                .Cast<AutomationElement>()
-                .Select(element => new
-                {
-                    Rect = element.Current.BoundingRectangle,
-                    Name = element.Current.Name,
-                    IsOffscreen = element.Current.IsOffscreen
-                })
-                .Where(candidate =>
-                    !candidate.IsOffscreen &&
-                    candidate.Rect.Width > 0 &&
-                    candidate.Rect.Height > 0 &&
-                    string.Equals(candidate.Name, "帮我批准", StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(candidate => candidate.Rect.Bottom)
-                .FirstOrDefault();
-
-            if (approval is not null)
-            {
-                approvalRight = (int)Math.Round(approval.Rect.Right);
-            }
 
             var editCondition = new PropertyCondition(
                 AutomationElement.ControlTypeProperty,
@@ -228,30 +199,33 @@ internal static class CodexHost
                     hostBounds,
                     out var composerRect))
             {
-                composerBottomPixels = (int)Math.Round(composerRect.Bottom);
+                composerRectPixels = composerRect;
             }
 
             var buttonCondition = new PropertyCondition(
                 AutomationElement.ControlTypeProperty,
                 ControlType.Button);
             var buttonCandidates = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, buttonCondition));
-            var bottomReference = composerBottomPixels ?? hostBounds.Bottom;
+            var bottomReference = composerRectPixels?.Bottom ?? hostBounds.Bottom;
+            var leftReference = composerRectPixels?.Left ?? edit.Rect.Left;
             var plus = buttonCandidates
                 .Where(candidate =>
                     candidate.Rect.Width is >= 20 and <= 48 &&
                     candidate.Rect.Height is >= 20 and <= 48 &&
                     candidate.Rect.Left >= hostBounds.Left &&
                     candidate.Rect.Right <= hostBounds.Right + 20 &&
+                    candidate.Rect.Left >= leftReference - 24 &&
+                    candidate.Rect.Left <= leftReference + 160 &&
                     candidate.Rect.Bottom >= bottomReference - 100 &&
                     candidate.Rect.Bottom <= hostBounds.Bottom + 20)
-                .OrderByDescending(candidate => IsAddFilesButton(candidate.Name))
-                .ThenBy(candidate => candidate.Rect.Left)
+                .OrderByDescending(candidate => candidate.ClassName.Contains("aspect-square", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(candidate => Math.Abs(candidate.Rect.Left - leftReference))
                 .ThenByDescending(candidate => candidate.Rect.Bottom)
                 .FirstOrDefault();
 
             if (plus.Element is not null)
             {
-                plusCenterYPixels = (int)Math.Round((plus.Rect.Top + plus.Rect.Bottom) / 2);
+                plusRectPixels = plus.Rect;
             }
         }
         catch (ElementNotAvailableException)
@@ -279,7 +253,6 @@ internal static class CodexHost
                     snapshots.Add(new AutomationSnapshot(
                         element,
                         rect,
-                        current.Name,
                         current.ClassName));
                 }
             }
@@ -345,17 +318,9 @@ internal static class CodexHost
         return false;
     }
 
-    private static bool IsAddFilesButton(string name)
-    {
-        return name.Contains("添加文件", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("add files", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("attach", StringComparison.OrdinalIgnoreCase);
-    }
-
     private readonly record struct AutomationSnapshot(
         AutomationElement? Element,
         Rect Rect,
-        string Name,
         string ClassName);
 
     private delegate bool EnumWindowsProc(nint windowHandle, nint parameter);

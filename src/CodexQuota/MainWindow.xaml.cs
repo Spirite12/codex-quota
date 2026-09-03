@@ -8,9 +8,10 @@ namespace CodexQuota;
 
 public partial class MainWindow : Window
 {
-    private const int ApprovalGapPixels = 30;
     private const int HostConfirmationSamples = 2;
+    private const double ComposerQuotaLeftOffsetDip = 151;
     private const double ComposerBottomGapDip = 3;
+    private const double PlusQuotaLeftOffsetDip = 143;
     private const double VerticalNudgeDip = 2;
     private readonly DispatcherTimer _hostTimer = new();
     private readonly DispatcherTimer _fallbackRefreshTimer = new();
@@ -18,8 +19,6 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private AppSettings _settings = AppSettings.Default;
     private CodexAppServerClient? _client;
-    private HostBounds? _lastHostBounds;
-    private int? _lastApprovalRightPixels;
     private bool _hasQuotaSnapshot;
     private int _visibleHostSamples;
     private int _missingHostSamples;
@@ -81,8 +80,6 @@ public partial class MainWindow : Window
 
                 if (_missingHostSamples >= HostConfirmationSamples)
                 {
-                    _lastHostBounds = null;
-                    _lastApprovalRightPixels = null;
                     await SuspendAndWaitAsync();
                 }
 
@@ -91,8 +88,6 @@ public partial class MainWindow : Window
 
             _missingHostSamples = 0;
             _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
-            hostBounds = StabilizeHostBounds(hostBounds);
-            _lastHostBounds = hostBounds;
             PositionAgainstHost(hostBounds);
 
             if (_visibleHostSamples < HostConfirmationSamples)
@@ -225,8 +220,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        hostBounds = StabilizeHostBounds(hostBounds);
-        _lastHostBounds = hostBounds;
         PositionAgainstHost(hostBounds);
         Opacity = 1;
     }
@@ -258,48 +251,35 @@ public partial class MainWindow : Window
         var hostBottomLeft = DeviceToDip(hostBounds.Left, hostBounds.Bottom);
         var hostBottomRight = DeviceToDip(hostBounds.Right, hostBounds.Bottom);
         var targetLeft = hostBottomLeft.X + ((hostBottomRight.X - hostBottomLeft.X - Width) / 2);
-        if (hostBounds.ApprovalRight is { } approvalRightPixels)
-        {
-            targetLeft = DeviceToDip(approvalRightPixels + ApprovalGapPixels, hostBounds.Bottom).X;
-        }
+        var minLeft = hostBottomLeft.X;
+        var maxLeft = hostBottomRight.X - Width;
 
-        Left = Math.Min(targetLeft, hostBottomRight.X - Width);
-
-        if (hostBounds.ComposerBottomPixels is { } composerBottomPixels)
+        if (hostBounds.ComposerRectPixels is { } composerRect)
         {
-            var composerBottom = DeviceToDip(0, composerBottomPixels).Y;
+            var composerLeft = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).X;
+            var composerRight = DeviceToDip((int)Math.Round(composerRect.Right), (int)Math.Round(composerRect.Bottom)).X;
+            targetLeft = composerLeft + ComposerQuotaLeftOffsetDip;
+            minLeft = composerLeft;
+            maxLeft = composerRight - Width;
+
+            var composerBottom = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).Y;
             Top = composerBottom - Height - ComposerBottomGapDip;
-            return;
         }
-
-        if (hostBounds.PlusCenterYPixels is { } plusCenterYPixels)
+        else if (hostBounds.PlusRectPixels is { } plusRect)
         {
-            var plusCenter = DeviceToDip(0, plusCenterYPixels).Y;
+            var plusLeft = DeviceToDip((int)Math.Round(plusRect.Left), (int)Math.Round(plusRect.Top)).X;
+            targetLeft = plusLeft + PlusQuotaLeftOffsetDip;
+            var plusCenter = DeviceToDip(
+                (int)Math.Round((plusRect.Left + plusRect.Right) / 2),
+                (int)Math.Round((plusRect.Top + plusRect.Bottom) / 2)).Y;
             Top = plusCenter - (Height / 2);
-            return;
+        }
+        else
+        {
+            Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
         }
 
-        Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
-    }
-
-    private HostBounds StabilizeHostBounds(HostBounds hostBounds)
-    {
-        if (hostBounds.ApprovalRight is { } approvalRight)
-        {
-            _lastApprovalRightPixels = approvalRight;
-            return hostBounds;
-        }
-
-        if (_lastApprovalRightPixels is not { } previousApprovalRight || _lastHostBounds is not { } previousHostBounds)
-        {
-            return hostBounds;
-        }
-
-        var hostDeltaX = hostBounds.Left - previousHostBounds.Left;
-        return hostBounds with
-        {
-            ApprovalRight = previousApprovalRight + hostDeltaX
-        };
+        Left = Math.Clamp(targetLeft, minLeft, maxLeft);
     }
 
     private Point DeviceToDip(int x, int y)
@@ -333,8 +313,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        hostBounds = StabilizeHostBounds(hostBounds);
-        _lastHostBounds = hostBounds;
         PositionAgainstHost(hostBounds);
     }
 
