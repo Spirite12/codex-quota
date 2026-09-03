@@ -26,6 +26,8 @@ Codex 额度查询工具 / Read-only Codex quota monitor for Windows。
 2. 从 GitHub Releases 下载 `codex-quota.exe`。
 3. 运行安装包并按提示选择安装路径。
 
+当前版本：[下载 v0.1.0 安装包](https://github.com/Spirite12/codex-quota/releases/tag/v0.1.0)。
+
 普通用户不需要安装 .NET SDK；只有从源码构建安装包时才需要。
 
 ## 安全边界
