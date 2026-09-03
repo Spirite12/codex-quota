@@ -115,16 +115,14 @@ public partial class MainWindow : Window
             var account = await client.GetAccountAsync(CancellationToken.None);
             if (!account.IsSignedInWithChatGpt)
             {
-                client.RateLimitsUpdated -= Client_RateLimitsUpdated;
-                await client.DisposeAsync();
+                await DisposeClientQuietlyAsync(client);
                 await SuspendAndWaitAsync();
                 return;
             }
 
             if (_closing)
             {
-                client.RateLimitsUpdated -= Client_RateLimitsUpdated;
-                await client.DisposeAsync();
+                await DisposeClientQuietlyAsync(client);
                 return;
             }
 
@@ -137,8 +135,7 @@ public partial class MainWindow : Window
         }
         catch
         {
-            client.RateLimitsUpdated -= Client_RateLimitsUpdated;
-            await client.DisposeAsync();
+            await DisposeClientQuietlyAsync(client);
             await SuspendAndWaitAsync();
         }
     }
@@ -274,8 +271,7 @@ public partial class MainWindow : Window
         var client = Interlocked.Exchange(ref _client, null);
         if (client is not null)
         {
-            client.RateLimitsUpdated -= Client_RateLimitsUpdated;
-            await client.DisposeAsync();
+            await DisposeClientQuietlyAsync(client);
         }
     }
 
@@ -303,11 +299,22 @@ public partial class MainWindow : Window
         var client = Interlocked.Exchange(ref _client, null);
         if (client is not null)
         {
-            client.RateLimitsUpdated -= Client_RateLimitsUpdated;
-            await client.DisposeAsync();
+            await DisposeClientQuietlyAsync(client);
         }
 
         Opacity = 0;
         Hide();
+    }
+
+    private async Task DisposeClientQuietlyAsync(CodexAppServerClient client)
+    {
+        client.RateLimitsUpdated -= Client_RateLimitsUpdated;
+        try
+        {
+            await client.DisposeAsync();
+        }
+        catch
+        {
+        }
     }
 }

@@ -16,6 +16,8 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
     private Process? _process;
     private StreamWriter? _input;
     private Task? _disposeTask;
+    private Task? _outputPumpTask;
+    private Task? _errorPumpTask;
     private int _nextRequestId;
 
     public event EventHandler? RateLimitsUpdated;
@@ -47,8 +49,8 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         _input = _process.StandardInput;
         _input.AutoFlush = true;
 
-        _ = PumpOutputAsync(_shutdown.Token);
-        _ = DrainErrorAsync(_shutdown.Token);
+        _outputPumpTask = PumpOutputAsync(_shutdown.Token);
+        _errorPumpTask = DrainErrorAsync(_shutdown.Token);
 
         var initialize = RequestAsync(
             "initialize",
@@ -251,26 +253,106 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
-        _shutdown.Cancel();
-        _input?.Close();
+        try
+        {
+            _shutdown.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
 
-        if (_process is { HasExited: false } process)
+        var input = Interlocked.Exchange(ref _input, null);
+        var process = Interlocked.Exchange(ref _process, null);
+
+        try
+        {
+            input?.Close();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (process is not null)
         {
             try
             {
-                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));
+                if (!process.HasExited)
+                {
+                    try
+                    {
+                        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));
+                    }
+                    catch (TimeoutException)
+                    {
+                        if (!process.HasExited)
+                        {
+                            process.Kill(entireProcessTree: true);
+                            await process.WaitForExitAsync();
+                        }
+                    }
+                }
             }
-            catch (TimeoutException)
+            catch (InvalidOperationException)
             {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
             }
         }
 
-        _input?.Dispose();
-        _process?.Dispose();
-        _writeGate.Dispose();
-        _shutdown.Dispose();
+        await WaitForPumpAsync(_outputPumpTask);
+        await WaitForPumpAsync(_errorPumpTask);
+
+        try
+        {
+            input?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            process?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            _writeGate.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            _shutdown.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private static async Task WaitForPumpAsync(Task? pumpTask)
+    {
+        if (pumpTask is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await pumpTask.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (Exception)
+        {
+        }
     }
 }
 
