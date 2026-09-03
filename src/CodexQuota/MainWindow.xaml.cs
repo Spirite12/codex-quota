@@ -9,6 +9,7 @@ namespace CodexQuota;
 public partial class MainWindow : Window
 {
     private const int ApprovalGapPixels = 30;
+    private const int HostConfirmationSamples = 2;
     private const double VerticalNudgeDip = 2;
     private readonly DispatcherTimer _hostTimer = new();
     private readonly DispatcherTimer _fallbackRefreshTimer = new();
@@ -19,6 +20,8 @@ public partial class MainWindow : Window
     private HostBounds? _lastHostBounds;
     private int? _lastApprovalRightPixels;
     private bool _hasQuotaSnapshot;
+    private int _visibleHostSamples;
+    private int _missingHostSamples;
     private bool _closing;
 
     public MainWindow()
@@ -70,13 +73,33 @@ public partial class MainWindow : Window
 
             if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
             {
-                _lastHostBounds = null;
-                _lastApprovalRightPixels = null;
-                await SuspendAndWaitAsync();
+                _visibleHostSamples = 0;
+                _missingHostSamples = Math.Min(_missingHostSamples + 1, HostConfirmationSamples);
+                _fallbackRefreshTimer.Stop();
+                Opacity = 0;
+
+                if (_missingHostSamples >= HostConfirmationSamples)
+                {
+                    _lastHostBounds = null;
+                    _lastApprovalRightPixels = null;
+                    await SuspendAndWaitAsync();
+                }
+
                 return;
             }
 
+            _missingHostSamples = 0;
+            _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
             hostBounds = StabilizeHostBounds(hostBounds);
+            _lastHostBounds = hostBounds;
+            PositionAgainstHost(hostBounds);
+
+            if (_visibleHostSamples < HostConfirmationSamples)
+            {
+                Opacity = 0;
+                return;
+            }
+
             if (!IsVisible)
             {
                 Opacity = 0;
@@ -88,11 +111,13 @@ public partial class MainWindow : Window
                 Opacity = 1;
             }
 
-            _lastHostBounds = hostBounds;
-            PositionAgainstHost(hostBounds);
-
             if (_client is not null)
             {
+                if (!_fallbackRefreshTimer.IsEnabled)
+                {
+                    _fallbackRefreshTimer.Start();
+                }
+
                 return;
             }
 
@@ -161,8 +186,10 @@ public partial class MainWindow : Window
         try
         {
             var client = _client;
-            if (_closing || client is null)
+            if (_closing || client is null || _visibleHostSamples < HostConfirmationSamples ||
+                !CodexHost.TryFindVisibleHostWindow(out _))
             {
+                Opacity = 0;
                 return;
             }
 
@@ -190,7 +217,8 @@ public partial class MainWindow : Window
         _hasQuotaSnapshot = true;
 
         UpdateLayout();
-        if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
+        if (_visibleHostSamples < HostConfirmationSamples ||
+            !CodexHost.TryFindVisibleHostWindow(out var hostBounds))
         {
             Opacity = 0;
             return;
@@ -309,6 +337,8 @@ public partial class MainWindow : Window
             await DisposeClientQuietlyAsync(client);
         }
 
+        _visibleHostSamples = 0;
+        _missingHostSamples = 0;
         _hasQuotaSnapshot = false;
         Opacity = 0;
         Hide();
