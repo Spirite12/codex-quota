@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
+using CodexQuota.Localization;
 
 namespace CodexQuota.Packager;
 
@@ -15,7 +16,13 @@ internal static class Program
         {
             var projectRoot = FindProjectRoot();
             if (projectRoot is null)
-                return Fail("Unable to locate the codex-quota project root.");
+                return Fail(UiText.T(
+                    "无法定位 Codex Quota 项目源码目录。",
+                    "Unable to locate the codex-quota project root."));
+
+            var installerPath = PromptForInstallerPath(projectRoot.FullName);
+            if (installerPath is null)
+                return 0;
 
             var buildRoot = Path.Combine(projectRoot.FullName, "build");
             var stagingRoot = Path.Combine(buildRoot, "package");
@@ -76,25 +83,35 @@ internal static class Program
 
             var setupStub = Path.Combine(setupOutput, "codex-quota-setup.exe");
             if (!File.Exists(setupStub))
-                return Fail("The setup stub was not produced.");
+                return Fail(UiText.T(
+                    "未生成安装器启动文件。",
+                    "The setup stub was not produced."));
 
-            var driveRoot = Path.GetPathRoot(projectRoot.FullName);
-            if (string.IsNullOrWhiteSpace(driveRoot))
-                return Fail("Unable to determine the project drive root.");
+            var installerDirectory = Path.GetDirectoryName(installerPath);
+            if (string.IsNullOrWhiteSpace(installerDirectory))
+                return Fail(UiText.T(
+                    "无法确定安装包输出目录。",
+                    "Unable to determine the installer output directory."));
 
-            var installerPath = Path.Combine(driveRoot, "codex-quota.exe");
+            Directory.CreateDirectory(installerDirectory);
             CreateSelfExtractingInstaller(setupStub, payloadZip, installerPath);
 
             Directory.Delete(stagingRoot, recursive: true);
             Console.WriteLine();
-            Console.WriteLine($"Installer created: {installerPath}");
-            Console.WriteLine("The installer is ready. It has not been executed.");
+            Console.WriteLine(UiText.T(
+                $"安装包已生成：{installerPath}",
+                $"Installer created: {installerPath}"));
+            Console.WriteLine(UiText.T(
+                "安装包已准备好，尚未执行安装。",
+                "The installer is ready. It has not been executed."));
             WaitForExit();
             return 0;
         }
         catch (Exception exception)
         {
-            return Fail($"Packaging failed.\n\n{exception.Message}");
+            return Fail(UiText.T(
+                $"打包失败。\n\n{exception.Message}",
+                $"Packaging failed.\n\n{exception.Message}"));
         }
     }
 
@@ -109,6 +126,35 @@ internal static class Program
         }
 
         return null;
+    }
+
+    private static string? PromptForInstallerPath(string projectRoot)
+    {
+        var defaultPath = Path.Combine(projectRoot, "codex-quota-setup.exe");
+
+        Console.WriteLine(UiText.T(
+            "请输入安装包生成位置。可以输入文件夹，或输入完整的 .exe 文件路径。",
+            "Enter the installer output location. You can enter a folder or a full .exe file path."));
+        Console.WriteLine(UiText.T(
+            $"直接回车使用默认路径：{defaultPath}",
+            $"Press Enter to use the default path: {defaultPath}"));
+        Console.WriteLine(UiText.T(
+            "如果使用 C 盘根目录，请输入：C:\\",
+            "For the C drive root, enter: C:\\"));
+        Console.Write("> ");
+
+        var input = Console.ReadLine();
+        if (input is null)
+            return null;
+
+        input = input.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(input))
+            return defaultPath;
+
+        var selectedPath = Path.GetFullPath(input);
+        return string.Equals(Path.GetExtension(selectedPath), ".exe", StringComparison.OrdinalIgnoreCase)
+            ? selectedPath
+            : Path.Combine(selectedPath, "codex-quota-setup.exe");
     }
 
     private static void PublishFrameworkDependentMain(string workingDirectory, string projectPath, string outputPath)
@@ -159,12 +205,15 @@ internal static class Program
             startInfo.ArgumentList.Add(argument);
 
         using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Unable to start dotnet.");
+            ?? throw new InvalidOperationException(
+                UiText.T("无法启动 dotnet。", "Unable to start dotnet."));
         process.WaitForExit();
 
         if (process.ExitCode != 0)
             throw new InvalidOperationException(
-                $"dotnet {arguments[0]} failed with exit code {process.ExitCode}.");
+                UiText.T(
+                    $"dotnet {arguments[0]} 执行失败，退出代码为 {process.ExitCode}。",
+                    $"dotnet {arguments[0]} failed with exit code {process.ExitCode}."));
     }
 
     private static void CopyDirectoryContents(string sourceDirectory, string destinationDirectory)
@@ -210,7 +259,9 @@ internal static class Program
             || !fullStaging.EndsWith("build\\package\\", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "The staging path is outside the project build directory.");
+                UiText.T(
+                    "临时打包目录位于项目构建目录之外。",
+                    "The staging path is outside the project build directory."));
         }
     }
 
@@ -227,7 +278,7 @@ internal static class Program
             return;
 
         Console.WriteLine();
-        Console.WriteLine("Press any key to close.");
+        Console.WriteLine(UiText.T("按任意键关闭。", "Press any key to close."));
         try
         {
             Console.ReadKey(intercept: true);
