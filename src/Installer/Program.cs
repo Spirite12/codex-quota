@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Windows;
+using CodexQuota.Localization;
 using FormsDialogResult = System.Windows.Forms.DialogResult;
 using FormsFolderBrowserDialog = System.Windows.Forms.FolderBrowserDialog;
 using WpfMessageBox = System.Windows.MessageBox;
@@ -27,8 +28,10 @@ internal static class Program
             if (payloadPath is null)
             {
                 ShowError(
-                    "This file does not contain a valid codex-quota installation package.",
-                    "Install codex-quota");
+                    UiText.T(
+                        "安装包中没有有效的 Codex Quota 安装内容。",
+                        "This file does not contain a valid codex-quota installation package."),
+                    UiText.T("安装 Codex Quota", "Install codex-quota"));
                 return;
             }
 
@@ -40,7 +43,9 @@ internal static class Program
             string installRoot;
             using (var dialog = new FormsFolderBrowserDialog
             {
-                Description = "Choose the installation folder for codex-quota.",
+                Description = UiText.T(
+                    "选择 Codex Quota 的安装文件夹。",
+                    "Choose the installation folder for codex-quota."),
                 SelectedPath = defaultPath,
                 ShowNewFolderButton = true,
                 UseDescriptionForTitle = true
@@ -56,7 +61,7 @@ internal static class Program
 
             if (!ValidateInstallRoot(installRoot, out var validationError))
             {
-                ShowError(validationError, "Install codex-quota");
+                ShowError(validationError, UiText.T("安装 Codex Quota", "Install codex-quota"));
                 return;
             }
 
@@ -74,32 +79,38 @@ internal static class Program
 
             if (!TryRegisterUninstallEntry(installRoot, out var registryError))
             {
-                ShowError(registryError, "Install incomplete");
+                ShowError(registryError, UiText.T("安装未完成", "Install incomplete"));
                 return;
             }
 
             if (!TryRegisterListenerTask(installRoot, out var taskError))
             {
                 TryRemoveUninstallEntry(installRoot, out _);
-                ShowError(taskError, "Install incomplete");
+                ShowError(taskError, UiText.T("安装未完成", "Install incomplete"));
                 return;
             }
 
             var runResult = RunSchtasks("/Run", "/TN", ListenerTaskName);
             var message = runResult.ExitCode == 0
-                ? "codex-quota was installed. The listener is running and will start the Companion when Codex is open."
-                : "codex-quota was installed. The listener will start automatically at the next sign-in.";
+                ? UiText.T(
+                    "Codex Quota 已安装。监听器正在运行，Codex 打开时会启动 Companion。",
+                    "codex-quota was installed. The listener is running and will start the Companion when Codex is open.")
+                : UiText.T(
+                    "Codex Quota 已安装。监听器将在下次登录 Windows 时自动启动。",
+                    "codex-quota was installed. The listener will start automatically at the next sign-in.");
             WpfMessageBox.Show(
                 message,
-                "codex-quota installed",
+                UiText.T("Codex Quota 已安装", "codex-quota installed"),
                 MessageBoxButton.OK,
                 runResult.ExitCode == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         catch (Exception exception)
         {
             ShowError(
-                $"Installation failed.\n\n{exception.Message}",
-                "Install incomplete");
+                UiText.T(
+                    $"安装失败。\n\n{exception.Message}",
+                    $"Installation failed.\n\n{exception.Message}"),
+                UiText.T("安装未完成", "Install incomplete"));
         }
         finally
         {
@@ -119,11 +130,14 @@ internal static class Program
     private static bool ConfirmInstallation(string installRoot)
     {
         var existingInstallation = IsExistingInstallation(installRoot);
-        var action = existingInstallation ? "update" : "install";
-        var message = $"This will {action} codex-quota in:\n\n{installRoot}\n\nThe Windows startup task and Installed Apps entry will also be configured. Continue?";
+        var chineseAction = existingInstallation ? "更新" : "安装";
+        var englishAction = existingInstallation ? "update" : "install";
+        var message = UiText.T(
+            $"即将在以下位置{chineseAction} Codex Quota：\n\n{installRoot}\n\n同时会配置 Windows 启动任务和“已安装的应用”条目。是否继续？",
+            $"This will {englishAction} codex-quota in:\n\n{installRoot}\n\nThe Windows startup task and Installed Apps entry will also be configured. Continue?");
         return WpfMessageBox.Show(
             message,
-            "Install codex-quota",
+            UiText.T("安装 Codex Quota", "Install codex-quota"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Information,
             MessageBoxResult.No) == MessageBoxResult.Yes;
@@ -136,14 +150,18 @@ internal static class Program
         var setupDirectory = setupPath is null ? null : Path.GetDirectoryName(Path.GetFullPath(setupPath));
         if (setupDirectory is not null && PathsEqual(installRoot, setupDirectory))
         {
-            error = "Choose a folder different from the folder containing this setup file.";
+            error = UiText.T(
+                "请选择不同于安装包所在文件夹的目录。",
+                "Choose a folder different from the folder containing this setup file.");
             return false;
         }
 
         var pathRoot = Path.GetPathRoot(installRoot);
         if (pathRoot is not null && PathsEqual(installRoot, pathRoot))
         {
-            error = "Choose a dedicated installation folder, not a drive root.";
+            error = UiText.T(
+                "请选择专用安装文件夹，不要选择磁盘根目录。",
+                "Choose a dedicated installation folder, not a drive root.");
             return false;
         }
 
@@ -160,7 +178,9 @@ internal static class Program
 
         if (Directory.EnumerateFileSystemEntries(installRoot).Any())
         {
-            error = "Choose an empty folder or an existing codex-quota installation folder.";
+            error = UiText.T(
+                "请选择空文件夹，或选择已有的 Codex Quota 安装文件夹。",
+                "Choose an empty folder or an existing codex-quota installation folder.");
             return false;
         }
 
@@ -175,7 +195,9 @@ internal static class Program
             using var key = Registry.CurrentUser.CreateSubKey(UninstallKeyPath);
             if (key is null)
             {
-                error = "Unable to create the Windows Installed Apps entry.";
+                error = UiText.T(
+                    "无法创建 Windows“已安装的应用”条目。",
+                    "Unable to create the Windows Installed Apps entry.");
                 return false;
             }
 
@@ -192,7 +214,9 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            error = $"Unable to create the Windows Installed Apps entry.\n\n{exception.Message}";
+            error = UiText.T(
+                $"无法创建 Windows“已安装的应用”条目。\n\n{exception.Message}",
+                $"Unable to create the Windows Installed Apps entry.\n\n{exception.Message}");
             return false;
         }
     }
@@ -202,7 +226,9 @@ internal static class Program
         var launcherPath = Path.Combine(installRoot, "codex-quota-launcher.exe");
         if (!File.Exists(launcherPath))
         {
-            error = "The launcher file is missing from the installation package.";
+            error = UiText.T(
+                "安装包中缺少启动器文件。",
+                "The launcher file is missing from the installation package.");
             return false;
         }
 
@@ -223,7 +249,9 @@ internal static class Program
             "/F");
         if (result.ExitCode != 0)
         {
-            error = $"Unable to create the Codex startup task.\n\n{FormatProcessOutput(result)}";
+            error = UiText.T(
+                $"无法创建 Codex 启动任务。\n\n{FormatProcessOutput(result)}",
+                $"Unable to create the Codex startup task.\n\n{FormatProcessOutput(result)}");
             return false;
         }
 
@@ -235,7 +263,9 @@ internal static class Program
             "Set-ScheduledTask -TaskName 'CodexQuota-OnCodexStart' -Settings $settings");
         if (powerSettings.ExitCode != 0)
         {
-            error = $"Unable to configure the Codex startup task for battery operation.\n\n{FormatProcessOutput(powerSettings)}";
+            error = UiText.T(
+                $"无法配置 Codex 启动任务的电池供电设置。\n\n{FormatProcessOutput(powerSettings)}",
+                $"Unable to configure the Codex startup task for battery operation.\n\n{FormatProcessOutput(powerSettings)}");
             return false;
         }
 
@@ -272,7 +302,9 @@ internal static class Program
                 var registeredRoot = key.GetValue("InstallLocation") as string;
                 if (!string.IsNullOrWhiteSpace(registeredRoot) && !PathsEqual(registeredRoot, installRoot))
                 {
-                    error = "The Installed Apps entry points to a different installation folder. No files were deleted.";
+                    error = UiText.T(
+                        "“已安装的应用”条目指向其他安装文件夹，未删除任何文件。",
+                        "The Installed Apps entry points to a different installation folder. No files were deleted.");
                     return false;
                 }
             }
@@ -283,7 +315,9 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            error = $"Unable to remove the Windows Installed Apps entry. No files were deleted.\n\n{exception.Message}";
+            error = UiText.T(
+                $"无法删除 Windows“已安装的应用”条目，未删除任何文件。\n\n{exception.Message}",
+                $"Unable to remove the Windows Installed Apps entry. No files were deleted.\n\n{exception.Message}");
             return false;
         }
     }
@@ -348,7 +382,10 @@ internal static class Program
         using var process = Process.Start(startInfo);
         if (process is null)
         {
-            return new ProcessResult(-1, string.Empty, "Unable to start schtasks.exe");
+            return new ProcessResult(
+                -1,
+                string.Empty,
+                UiText.T("无法启动 schtasks.exe。", "Unable to start schtasks.exe"));
         }
 
         var standardOutput = process.StandardOutput.ReadToEnd();
@@ -377,7 +414,10 @@ internal static class Program
         using var process = Process.Start(startInfo);
         if (process is null)
         {
-            return new ProcessResult(-1, string.Empty, "Unable to start powershell.exe");
+            return new ProcessResult(
+                -1,
+                string.Empty,
+                UiText.T("无法启动 powershell.exe。", "Unable to start powershell.exe"));
         }
 
         var standardOutput = process.StandardOutput.ReadToEnd();

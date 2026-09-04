@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using CodexQuota.Localization;
 
 namespace CodexQuota.RuntimeSupport;
 
@@ -43,8 +44,10 @@ internal static class RuntimeRequirement
     {
         MessageBox(
             nint.Zero,
-            "Please install Microsoft .NET 10 Desktop Runtime and try again.",
-            "Codex Quota - Runtime Required",
+            UiText.T(
+                "请安装 Microsoft .NET 10 Desktop Runtime 后重试。",
+                "Please install Microsoft .NET 10 Desktop Runtime and try again."),
+            UiText.T("Codex Quota - 需要运行时", "Codex Quota - Runtime Required"),
             MessageBoxOk | MessageBoxIconInformation);
     }
 

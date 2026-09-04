@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Compile Include="..\RuntimeSupport\RuntimeRequirement.cs" Link="RuntimeRequirement.cs" />
+    <Compile Include="..\RuntimeSupport\UiText.cs" Link="UiText.cs" />
   </ItemGroup>
 
 </Project>

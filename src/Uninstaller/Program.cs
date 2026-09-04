@@ -1,7 +1,9 @@
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using CodexQuota.Localization;
 
 namespace CodexQuota.Uninstaller;
 
@@ -20,16 +22,30 @@ internal static class Program
         if (installRoot is null)
         {
             MessageBox.Show(
-                "Unable to determine the codex-quota installation directory. Uninstall canceled.",
-                "Uninstall codex-quota",
+                UiText.T(
+                    "无法确定 Codex Quota 的安装目录，卸载已取消。",
+                    "Unable to determine the codex-quota installation directory. Uninstall canceled."),
+                UiText.T("卸载 Codex Quota", "Uninstall codex-quota"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             return;
         }
 
+        if (!TryRunSafetyPrecheck(installRoot.FullName, out var safetyMessage))
+        {
+            MessageBox.Show(
+                safetyMessage,
+                UiText.T("卸载已取消", "Uninstall canceled"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
         var confirmation = MessageBox.Show(
-            $"This will uninstall codex-quota and delete all files in this installation directory:\n\n{installRoot.FullName}\n\nThe Codex startup listener task and Installed Apps entry will also be removed. This action cannot be undone. Continue?",
-            "Uninstall codex-quota",
+            UiText.T(
+                $"即将卸载 Codex Quota，并删除此安装目录中的所有文件：\n\n{installRoot.FullName}\n\n同时会删除 Codex 启动监听任务和“已安装的应用”条目。此操作无法撤销。是否继续？",
+                $"This will uninstall codex-quota and delete all files in this installation directory:\n\n{installRoot.FullName}\n\nThe Codex startup listener task and Installed Apps entry will also be removed. This action cannot be undone. Continue?"),
+            UiText.T("卸载 Codex Quota", "Uninstall codex-quota"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);
@@ -42,7 +58,7 @@ internal static class Program
         {
             MessageBox.Show(
                 stopError,
-                "Uninstall incomplete",
+                UiText.T("卸载未完成", "Uninstall incomplete"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             return;
@@ -52,7 +68,7 @@ internal static class Program
         {
             MessageBox.Show(
                 taskError,
-                "Uninstall incomplete",
+                UiText.T("卸载未完成", "Uninstall incomplete"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             return;
@@ -62,15 +78,17 @@ internal static class Program
         {
             MessageBox.Show(
                 registryError,
-                "Uninstall incomplete",
+                UiText.T("卸载未完成", "Uninstall incomplete"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             return;
         }
 
         var ready = MessageBox.Show(
-            "The listener task and Installed Apps entry have been removed. Click OK to close the uninstaller and delete the entire installation directory.",
-            "Continue uninstall",
+            UiText.T(
+                "监听任务和“已安装的应用”条目已删除。点击“确定”关闭卸载程序并删除整个安装目录。",
+                "The listener task and Installed Apps entry have been removed. Click OK to close the uninstaller and delete the entire installation directory."),
+            UiText.T("继续卸载", "Continue uninstall"),
             MessageBoxButton.OK,
             MessageBoxImage.Information);
         if (ready != MessageBoxResult.OK)
@@ -81,11 +99,216 @@ internal static class Program
         if (!ScheduleInstallRootDeletion(installRoot.FullName))
         {
             MessageBox.Show(
-                "Unable to schedule installation directory deletion. No files were deleted.",
-                "Uninstall incomplete",
+                UiText.T(
+                    "无法安排删除安装目录，未删除任何文件。",
+                    "Unable to schedule installation directory deletion. No files were deleted."),
+                UiText.T("卸载未完成", "Uninstall incomplete"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
+    }
+
+    private static bool TryRunSafetyPrecheck(string installRoot, out string message)
+    {
+        var gitPath = Path.Combine(installRoot, ".git");
+        if (Directory.Exists(gitPath) || File.Exists(gitPath))
+        {
+            message = UiText.T(
+                "检测到当前目录是源码工程，不是安全的安装目录。\n\n" +
+                "请从实际安装目录运行卸载程序。\n" +
+                "本次卸载已取消，未修改任何内容。",
+                "The current directory appears to be a source project, not a safe installation directory.\n\n" +
+                "Run the uninstaller from the actual installation directory.\n" +
+                "Uninstall canceled. No changes were made.");
+            return false;
+        }
+
+        if (!TryFindExternalLockingProcesses(installRoot, out var processes, out var error))
+        {
+            message = UiText.T(
+                $"无法确认卸载目录是否被占用。\n\n{error}\n\n" +
+                "为安全起见，本次卸载已取消，未修改任何内容。",
+                $"Unable to verify whether the uninstall directory is in use.\n\n{error}\n\n" +
+                "For safety, uninstall canceled. No changes were made.");
+            return false;
+        }
+
+        if (processes.Count == 0)
+        {
+            message = string.Empty;
+            return true;
+        }
+
+        message = UiText.T(
+            "检测到卸载目录正在被以下程序使用：\n\n" +
+            string.Join("\n", processes) +
+            "\n\n请关闭 Codex、资源管理器和终端后重试。\n" +
+            "本次卸载已取消，未修改任何内容。",
+            "The uninstall directory is being used by:\n\n" +
+            string.Join("\n", processes) +
+            "\n\nClose Codex, File Explorer, and Terminal, then try again.\n" +
+            "Uninstall canceled. No changes were made.");
+        return false;
+    }
+
+    private static bool TryFindExternalLockingProcesses(
+        string installRoot,
+        out List<string> processes,
+        out string error)
+    {
+        processes = new List<string>();
+        error = string.Empty;
+        var resourceFiles = new List<string>();
+
+        try
+        {
+            resourceFiles.AddRange(Directory.EnumerateFiles(
+                installRoot,
+                "*",
+                SearchOption.AllDirectories));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            error = exception.Message;
+            return false;
+        }
+
+        if (resourceFiles.Count == 0)
+        {
+            return true;
+        }
+
+        var sessionKey = Guid.NewGuid().ToString("N");
+        var startResult = RmStartSession(out var sessionHandle, 0, sessionKey);
+        if (startResult != ErrorSuccess)
+        {
+            error = UiText.T(
+                $"Restart Manager 错误：{startResult}。",
+                $"Restart Manager error: {startResult}.");
+            return false;
+        }
+
+        try
+        {
+            var registerResult = RmRegisterResources(
+                sessionHandle,
+                (uint)resourceFiles.Count,
+                resourceFiles.ToArray(),
+                0,
+                nint.Zero,
+                0,
+                null);
+            if (registerResult != ErrorSuccess)
+            {
+                error = UiText.T(
+                    $"Restart Manager 错误：{registerResult}。",
+                    $"Restart Manager error: {registerResult}.");
+                return false;
+            }
+
+            uint processInfoNeeded;
+            uint processInfoCount = 0;
+            uint rebootReasons;
+            var listResult = RmGetList(
+                sessionHandle,
+                out processInfoNeeded,
+                ref processInfoCount,
+                Array.Empty<RmProcessInfo>(),
+                out rebootReasons);
+            if (listResult == ErrorSuccess)
+            {
+                return true;
+            }
+
+            if (listResult != ErrorMoreData || processInfoNeeded == 0)
+            {
+                error = UiText.T(
+                    $"Restart Manager 错误：{listResult}。",
+                    $"Restart Manager error: {listResult}.");
+                return false;
+            }
+
+            var affectedProcesses = new RmProcessInfo[processInfoNeeded];
+            processInfoCount = processInfoNeeded;
+            listResult = RmGetList(
+                sessionHandle,
+                out processInfoNeeded,
+                ref processInfoCount,
+                affectedProcesses,
+                out rebootReasons);
+            if (listResult != ErrorSuccess)
+            {
+                error = UiText.T(
+                    $"Restart Manager 错误：{listResult}。",
+                    $"Restart Manager error: {listResult}.");
+                return false;
+            }
+
+            foreach (var affectedProcess in affectedProcesses.Take((int)processInfoCount))
+            {
+                if (affectedProcess.ProcessId == Environment.ProcessId ||
+                    IsManagedProcess(affectedProcess.ProcessId, installRoot))
+                {
+                    continue;
+                }
+
+                processes.Add(DescribeProcess(affectedProcess));
+            }
+
+            return true;
+        }
+        finally
+        {
+            RmEndSession(sessionHandle);
+        }
+    }
+
+    private static bool IsManagedProcess(int processId, string installRoot)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var executablePath = process.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(executablePath) ||
+                !IsPathWithinInstallRoot(executablePath, installRoot))
+            {
+                return false;
+            }
+
+            var executableName = Path.GetFileNameWithoutExtension(executablePath);
+            return string.Equals(executableName, "codex-quota", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(executableName, "codex-quota-launcher", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static string DescribeProcess(RmProcessInfo process)
+    {
+        var appName = string.IsNullOrWhiteSpace(process.AppName)
+            ? UiText.T("未知程序", "Unknown process")
+            : process.AppName.Trim();
+        return UiText.T(
+            $"{appName}（PID {process.ProcessId}）",
+            $"{appName} (PID {process.ProcessId})");
+    }
+
+    private static bool IsPathWithinInstallRoot(string path, string installRoot)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var rootWithSeparator = Path.GetFullPath(installRoot).TrimEnd(Path.DirectorySeparatorChar) +
+                                Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase);
     }
 
     private static DirectoryInfo? ResolveInstallRoot()
@@ -162,13 +385,17 @@ internal static class Program
                     }
                     catch (Exception ex)
                     {
-                        error = $"Unable to stop a running codex-quota process: {ex.Message}";
+                        error = UiText.T(
+                            $"无法停止正在运行的 Codex Quota 进程：{ex.Message}",
+                            $"Unable to stop a running codex-quota process: {ex.Message}");
                         return false;
                     }
 
                     if (!process.HasExited)
                     {
-                        error = "A codex-quota process is still running. No files were deleted. Close it and try again.";
+                        error = UiText.T(
+                            "Codex Quota 进程仍在运行，未删除任何文件。请关闭它后重试。",
+                            "A codex-quota process is still running. No files were deleted. Close it and try again.");
                         return false;
                     }
                 }
@@ -199,7 +426,9 @@ internal static class Program
                 return true;
             }
 
-            error = $"Unable to inspect the Codex startup listener task. No files were deleted.\n\n{queryOutput.Trim()}";
+            error = UiText.T(
+                $"无法检查 Codex 启动监听任务，未删除任何文件。\n\n{queryOutput.Trim()}",
+                $"Unable to inspect the Codex startup listener task. No files were deleted.\n\n{queryOutput.Trim()}");
             return false;
         }
 
@@ -210,7 +439,10 @@ internal static class Program
             return true;
         }
 
-        error = $"Unable to remove the Codex startup listener task. No files were deleted.\n\n{deletion.StandardOutput}\n{deletion.StandardError}".Trim();
+        var output = $"{deletion.StandardOutput}\n{deletion.StandardError}".Trim();
+        error = UiText.T(
+            $"无法删除 Codex 启动监听任务，未删除任何文件。\n\n{output}",
+            $"Unable to remove the Codex startup listener task. No files were deleted.\n\n{output}");
         return false;
     }
 
@@ -229,7 +461,9 @@ internal static class Program
                 var registeredRoot = key.GetValue("InstallLocation") as string;
                 if (!string.IsNullOrWhiteSpace(registeredRoot) && !PathsEqual(registeredRoot, installRoot))
                 {
-                    error = "The Installed Apps entry points to a different installation folder. No files were deleted.";
+                    error = UiText.T(
+                        "“已安装的应用”条目指向其他安装文件夹，未删除任何文件。",
+                        "The Installed Apps entry points to a different installation folder. No files were deleted.");
                     return false;
                 }
             }
@@ -240,7 +474,9 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            error = $"Unable to remove the Windows Installed Apps entry. No files were deleted.\n\n{exception.Message}";
+            error = UiText.T(
+                $"无法删除 Windows“已安装的应用”条目，未删除任何文件。\n\n{exception.Message}",
+                $"Unable to remove the Windows Installed Apps entry. No files were deleted.\n\n{exception.Message}");
             return false;
         }
     }
@@ -263,7 +499,10 @@ internal static class Program
         using var process = Process.Start(startInfo);
         if (process is null)
         {
-            return new ProcessResult(-1, string.Empty, "Unable to start schtasks.exe");
+            return new ProcessResult(
+                -1,
+                string.Empty,
+                UiText.T("无法启动 schtasks.exe。", "Unable to start schtasks.exe"));
         }
 
         var standardOutput = process.StandardOutput.ReadToEnd();
@@ -304,6 +543,64 @@ internal static class Program
         startInfo.ArgumentList.Add("/c");
         startInfo.ArgumentList.Add($"timeout /t 2 /nobreak >nul & rmdir /s /q \"{installRoot}\"");
         return Process.Start(startInfo) is not null;
+    }
+
+    private const int ErrorSuccess = 0;
+    private const int ErrorMoreData = 234;
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    private static extern int RmStartSession(
+        out uint sessionHandle,
+        int sessionFlags,
+        string sessionKey);
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    private static extern int RmRegisterResources(
+        uint sessionHandle,
+        uint fileCount,
+        [In, MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPWStr)] string[] fileNames,
+        uint applicationCount,
+        nint applications,
+        uint serviceCount,
+        [In, MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPWStr)] string[]? serviceNames);
+
+    [DllImport("rstrtmgr.dll")]
+    private static extern int RmGetList(
+        uint sessionHandle,
+        out uint processInfoNeeded,
+        ref uint processInfoCount,
+        [In, Out] RmProcessInfo[] processInfo,
+        out uint rebootReasons);
+
+    [DllImport("rstrtmgr.dll")]
+    private static extern int RmEndSession(uint sessionHandle);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RmUniqueProcess
+    {
+        public int ProcessId;
+        public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct RmProcessInfo
+    {
+        public RmUniqueProcess Process;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string AppName;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string ServiceName;
+
+        public int ApplicationType;
+        public uint AppStatus;
+        public uint TSSessionId;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool Restartable;
+
+        public int ProcessId => Process.ProcessId;
     }
 
     private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError);
