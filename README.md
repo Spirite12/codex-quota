@@ -31,14 +31,22 @@ Codex 额度查询工具 / Read-only Codex quota monitor for Windows。
 
 - 启动且确认已登录后读取一次。
 - 收到额度更新通知后立即重新读取一次。
-- 仅在 Codex 仍打开时，以 120 秒作为兜底检查。
+- 仅在 Codex 仍打开时，默认每 120 秒进行一次兜底检查；间隔由 `config/settings.json` 中的 `fallbackRefreshSeconds` 控制。
 
-## 根目录程序
+## 程序文件说明
+
+安装目录：
 
 ```text
-codex-quota.exe             根目录引导器，启动 runtime/codex-quota.exe
+codex-quota.exe             安装后启动入口，启动 runtime/codex-quota.exe
 codex-quota-launcher.exe    启动监听器，绑定 Codex 启动任务
 uninstall-codex-quota.exe   卸载任务、注册信息和安装目录
-build-codex-quota.exe       启动后询问安装包生成位置，再执行构建
+runtime\codex-quota.exe     实际运行的 Companion
+```
+
+源码/打包目录：
+
+```text
+build-codex-quota.exe       询问安装包生成位置，再执行构建
 codex-quota-setup.exe       build-codex-quota.exe 生成的最终安装包
 ```
