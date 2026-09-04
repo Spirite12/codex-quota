@@ -130,7 +130,7 @@ internal static class Program
 
     private static string? PromptForInstallerPath(string projectRoot)
     {
-        var defaultPath = Path.Combine(projectRoot, "codex-quota.exe");
+        var defaultPath = Path.Combine(projectRoot, "codex-quota-setup.exe");
 
         Console.WriteLine(UiText.T(
             "请输入安装包生成位置。可以输入文件夹，或输入完整的 .exe 文件路径。",
@@ -154,7 +154,7 @@ internal static class Program
         var selectedPath = Path.GetFullPath(input);
         return string.Equals(Path.GetExtension(selectedPath), ".exe", StringComparison.OrdinalIgnoreCase)
             ? selectedPath
-            : Path.Combine(selectedPath, "codex-quota.exe");
+            : Path.Combine(selectedPath, "codex-quota-setup.exe");
     }
 
     private static void PublishFrameworkDependentMain(string workingDirectory, string projectPath, string outputPath)
