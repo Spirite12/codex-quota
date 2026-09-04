@@ -93,8 +93,8 @@ internal static class Program
             var runResult = RunSchtasks("/Run", "/TN", ListenerTaskName);
             var message = runResult.ExitCode == 0
                 ? UiText.T(
-                    "Codex Quota 已安装。监听器正在运行，Codex 打开时会启动 Companion。",
-                    "codex-quota was installed. The listener is running and will start the Companion when Codex is open.")
+                    "Codex Quota 已安装，监听器正在运行。\nCodex 启动时会启动 Companion。",
+                    "codex-quota was installed. The listener is running.\nThe Companion will start when Codex starts.")
                 : UiText.T(
                     "Codex Quota 已安装。监听器将在下次登录 Windows 时自动启动。",
                     "codex-quota was installed. The listener will start automatically at the next sign-in.");
