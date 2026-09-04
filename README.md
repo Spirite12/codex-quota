@@ -39,5 +39,5 @@ Codex 额度查询工具 / Read-only Codex quota monitor for Windows。
 codex-quota.exe             根目录引导器，启动 runtime/codex-quota.exe
 codex-quota-launcher.exe    启动监听器，绑定 Codex 启动任务
 uninstall-codex-quota.exe   卸载任务、注册信息和安装目录
-build-codex-quota.exe       构建 D:\codex-quota.exe 安装包
+build-codex-quota.exe       启动后询问安装包生成位置，再执行构建
 ```

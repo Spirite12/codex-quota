@@ -13,4 +13,9 @@
     <DebugType>None</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\RuntimeSupport\UiText.cs" Link="UiText.cs" />
+  </ItemGroup>
+
 </Project>
