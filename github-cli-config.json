@@ -1,0 +1,11 @@
+{
+  "branch": {
+    "format": "{type}/{stage}_{version}_{function}@{developer}"
+  },
+  "commit": {
+    "format": "<{type}> {subject}"
+  },
+  "github": {
+    "baseBranch": "main"
+  }
+}
