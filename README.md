@@ -1,5 +1,7 @@
 # codex-quota
 
+Read the English documentation [here](README.en.md).
+
 Codex 额度查询工具 / Read-only Codex quota monitor for Windows。
 
 这是一个只读 Windows 额度查询工具，只显示当前已登录 Codex 账号返回的 5H 和 1W（周）额度，并以无边框小窗口贴近 Codex Desktop 底部。
