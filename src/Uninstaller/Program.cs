@@ -14,10 +14,19 @@ internal static class Program
     private const string ListenerTaskName = "CodexQuota-OnCodexStart";
     private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexQuota";
     private const string MarkerFileName = ".codex-quota-install";
+    private const string CleanupArgument = "--cleanup";
+    private const int CleanupAttempts = 10;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (args.Length == 3 &&
+            string.Equals(args[0], CleanupArgument, StringComparison.OrdinalIgnoreCase))
+        {
+            RunCleanupMode(args[1], args[2]);
+            return;
+        }
+
         var installRoot = ResolveInstallRoot();
         if (installRoot is null)
         {
@@ -527,22 +536,175 @@ internal static class Program
 
     private static bool ScheduleInstallRootDeletion(string installRoot)
     {
-        if (installRoot.IndexOfAny(new[] { '&', '|', '<', '>', '^', '%' }) >= 0)
+        var currentExecutable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(currentExecutable) || !File.Exists(currentExecutable))
         {
             return false;
         }
 
-        var commandShell = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        var cleanupExecutable = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-quota-uninstaller-cleanup-{Guid.NewGuid():N}.exe");
+
+        try
+        {
+            File.Copy(currentExecutable, cleanupExecutable);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = cleanupExecutable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetTempPath()
+            };
+            startInfo.ArgumentList.Add(CleanupArgument);
+            startInfo.ArgumentList.Add(installRoot);
+            startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+
+            using var process = Process.Start(startInfo);
+            if (process is not null)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            File.Delete(cleanupExecutable);
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static void RunCleanupMode(string installRoot, string parentProcessIdText)
+    {
+        if (!int.TryParse(parentProcessIdText, out var parentProcessId) ||
+            !IsSafeInstallRootForCleanup(installRoot))
+        {
+            return;
+        }
+
+        WaitForParentProcess(parentProcessId);
+
+        for (var attempt = 0; attempt < CleanupAttempts; attempt++)
+        {
+            if (!Directory.Exists(installRoot))
+            {
+                break;
+            }
+
+            try
+            {
+                Directory.Delete(installRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            if (!Directory.Exists(installRoot))
+            {
+                break;
+            }
+
+            Thread.Sleep(1000);
+        }
+
+        var cleanupExecutable = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(cleanupExecutable))
+        {
+            ScheduleFileDeletion(cleanupExecutable);
+        }
+    }
+
+    private static bool IsSafeInstallRootForCleanup(string installRoot)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(installRoot);
+            var pathRoot = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrWhiteSpace(pathRoot) || PathsEqual(fullPath, pathRoot))
+            {
+                return false;
+            }
+
+            if (Directory.Exists(Path.Combine(fullPath, ".git")) ||
+                File.Exists(Path.Combine(fullPath, ".git")))
+            {
+                return false;
+            }
+
+            return File.Exists(Path.Combine(fullPath, MarkerFileName)) &&
+                   (HasInstallationFiles(fullPath, useLegacyDist: false) ||
+                    HasInstallationFiles(fullPath, useLegacyDist: true));
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void WaitForParentProcess(int parentProcessId)
+    {
+        if (parentProcessId <= 0 || parentProcessId == Environment.ProcessId)
+        {
+            Thread.Sleep(1000);
+            return;
+        }
+
+        try
+        {
+            using var parent = Process.GetProcessById(parentProcessId);
+            if (!parent.HasExited)
+            {
+                parent.WaitForExit(10000);
+            }
+        }
+        catch (ArgumentException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+
+    private static void ScheduleFileDeletion(string filePath)
+    {
         var startInfo = new ProcessStartInfo
         {
-            FileName = commandShell,
+            FileName = "powershell.exe",
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = Path.GetTempPath()
         };
-        startInfo.ArgumentList.Add("/c");
-        startInfo.ArgumentList.Add($"timeout /t 2 /nobreak >nul & rmdir /s /q \"{installRoot}\"");
-        return Process.Start(startInfo) is not null;
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(
+            "Start-Sleep -Milliseconds 1000; " +
+            "Remove-Item -LiteralPath $env:CODEX_QUOTA_CLEANUP_FILE -Force -ErrorAction SilentlyContinue");
+        startInfo.Environment["CODEX_QUOTA_CLEANUP_FILE"] = filePath;
+
+        try
+        {
+            using var process = Process.Start(startInfo);
+        }
+        catch
+        {
+        }
     }
 
     private const int ErrorSuccess = 0;
