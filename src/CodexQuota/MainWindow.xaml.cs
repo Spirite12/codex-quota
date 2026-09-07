@@ -86,6 +86,16 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (hostBounds.InputRectPixels is null)
+            {
+                _visibleHostSamples = 0;
+                _missingHostSamples = 0;
+                _fallbackRefreshTimer.Stop();
+                Opacity = 0;
+                Hide();
+                return;
+            }
+
             _missingHostSamples = 0;
             _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
             PositionAgainstHost(hostBounds);
@@ -183,7 +193,7 @@ public partial class MainWindow : Window
         {
             var client = _client;
             if (_closing || client is null || _visibleHostSamples < HostConfirmationSamples ||
-                !CodexHost.TryFindVisibleHostWindow(out _))
+                !CodexHost.TryFindVisibleInputHostWindow(out _))
             {
                 Opacity = 0;
                 return;
@@ -214,7 +224,7 @@ public partial class MainWindow : Window
 
         UpdateLayout();
         if (_visibleHostSamples < HostConfirmationSamples ||
-            !CodexHost.TryFindVisibleHostWindow(out var hostBounds))
+            !CodexHost.TryFindVisibleInputHostWindow(out var hostBounds))
         {
             Opacity = 0;
             return;
@@ -308,7 +318,7 @@ public partial class MainWindow : Window
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_closing || !IsVisible || !CodexHost.TryFindVisibleHostWindow(out var hostBounds))
+        if (_closing || !IsVisible || !CodexHost.TryFindVisibleInputHostWindow(out var hostBounds))
         {
             return;
         }
