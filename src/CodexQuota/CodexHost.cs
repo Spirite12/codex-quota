@@ -9,6 +9,7 @@ namespace CodexQuota;
 
 internal readonly record struct HostBounds(int Left, int Top, int Right, int Bottom)
 {
+    public Rect? InputRectPixels { get; init; }
     public Rect? ComposerRectPixels { get; init; }
     public Rect? PlusRectPixels { get; init; }
 
@@ -149,10 +150,12 @@ internal static class CodexHost
             TryFindCodexLayout(
                 activeCandidate.Handle,
                 activeCandidate.Bounds,
+                out var inputRectPixels,
                 out var composerRectPixels,
                 out var plusRectPixels);
             bounds = bounds with
             {
+                InputRectPixels = inputRectPixels,
                 ComposerRectPixels = composerRectPixels,
                 PlusRectPixels = plusRectPixels
             };
@@ -164,12 +167,25 @@ internal static class CodexHost
         return false;
     }
 
+    public static bool TryFindVisibleInputHostWindow(out HostBounds bounds)
+    {
+        if (!TryFindVisibleHostWindow(out bounds) || bounds.InputRectPixels is null)
+        {
+            bounds = default;
+            return false;
+        }
+
+        return true;
+    }
+
     private static void TryFindCodexLayout(
         nint hostHandle,
         HostBounds hostBounds,
+        out Rect? inputRectPixels,
         out Rect? composerRectPixels,
         out Rect? plusRectPixels)
     {
+        inputRectPixels = null;
         composerRectPixels = null;
         plusRectPixels = null;
 
@@ -193,7 +209,14 @@ internal static class CodexHost
                 .ThenByDescending(candidate => candidate.Rect.Bottom)
                 .FirstOrDefault();
 
-            if (edit.Element is not null && TryFindComposerContainer(
+            if (edit.Element is null)
+            {
+                return;
+            }
+
+            inputRectPixels = edit.Rect;
+
+            if (TryFindComposerContainer(
                     edit.Element,
                     edit.Rect,
                     hostBounds,
@@ -207,7 +230,7 @@ internal static class CodexHost
                 ControlType.Button);
             var buttonCandidates = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, buttonCondition));
             var bottomReference = composerRectPixels?.Bottom ?? hostBounds.Bottom;
-            var leftReference = composerRectPixels?.Left ?? edit.Rect.Left;
+            var leftReference = composerRectPixels?.Left ?? inputRectPixels.Value.Left;
             var plus = buttonCandidates
                 .Where(candidate =>
                     candidate.Rect.Width is >= 20 and <= 48 &&
