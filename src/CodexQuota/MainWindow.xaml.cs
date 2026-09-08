@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Media;
 using System.ComponentModel;
 using System.Windows.Threading;
+using System.Globalization;
+using CodexQuota.Localization;
 
 namespace CodexQuota;
 
@@ -27,6 +29,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        FiveHourLabel.Text = UiText.T("5H：", "5H:");
+        WeekLabel.Text = UiText.T("1W：", "1W:");
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -215,11 +219,11 @@ public partial class MainWindow : Window
     private void ApplyQuotas(QuotaSet quotas)
     {
         var fiveHour = quotas.FiveHour;
-        SetChip(FiveHourValue, FiveHourDot, fiveHour);
+        SetChip(FiveHourValue, FiveHourDot, fiveHour, isWeek: false);
         FiveHourChip.Visibility = fiveHour is null ? Visibility.Collapsed : Visibility.Visible;
         ChipGapColumn.Width = fiveHour is null ? new GridLength(0) : new GridLength(6);
         System.Windows.Controls.Grid.SetColumn(WeekChip, fiveHour is null ? 0 : 2);
-        SetChip(WeekValue, WeekDot, quotas.Week);
+        SetChip(WeekValue, WeekDot, quotas.Week, isWeek: true);
         _hasQuotaSnapshot = true;
 
         UpdateLayout();
@@ -234,7 +238,11 @@ public partial class MainWindow : Window
         Opacity = 1;
     }
 
-    private static void SetChip(System.Windows.Controls.TextBlock value, System.Windows.Shapes.Ellipse dot, QuotaWindow? quota)
+    private static void SetChip(
+        System.Windows.Controls.TextBlock value,
+        System.Windows.Shapes.Ellipse dot,
+        QuotaWindow? quota,
+        bool isWeek)
     {
         if (quota is null)
         {
@@ -243,8 +251,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        value.Text = $"{quota.Value.RemainingPercent}%";
+        value.Text = FormatQuotaValue(quota.Value, isWeek);
         dot.Fill = new SolidColorBrush(GetQuotaColor(quota.Value.RemainingPercent));
+    }
+
+    private static string FormatQuotaValue(QuotaWindow quota, bool isWeek)
+    {
+        if (quota.RemainingPercent != 0 || quota.ResetsAt is not long resetsAt)
+        {
+            return $"{quota.RemainingPercent}%";
+        }
+
+        var resetAt = DateTimeOffset.FromUnixTimeSeconds(resetsAt).ToLocalTime();
+        return isWeek
+            ? UiText.T(
+                $"{resetAt.Month}月{resetAt.Day}日",
+                resetAt.ToString("MMM d", CultureInfo.CurrentUICulture))
+            : UiText.T(
+                resetAt.ToString("HH:mm", CultureInfo.InvariantCulture),
+                resetAt.ToString("t", CultureInfo.CurrentUICulture));
     }
 
     private static Color GetQuotaColor(int remainingPercent)
