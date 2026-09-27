@@ -75,7 +75,9 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
+            if (!CodexHost.TryFindDisplayableHostWindow(
+                    NativeWindowHelper.GetWindowHandle(this),
+                    out var hostBounds))
             {
                 _visibleHostSamples = 0;
                 _missingHostSamples = Math.Min(_missingHostSamples + 1, HostConfirmationSamples);
@@ -90,18 +92,16 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (hostBounds.InputRectPixels is null)
+            _missingHostSamples = 0;
+            _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
+
+            if (hostBounds.HasImagePreviewOpen)
             {
-                _visibleHostSamples = 0;
-                _missingHostSamples = 0;
-                _fallbackRefreshTimer.Stop();
                 Opacity = 0;
                 Hide();
                 return;
             }
 
-            _missingHostSamples = 0;
-            _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
             PositionAgainstHost(hostBounds);
 
             if (_visibleHostSamples < HostConfirmationSamples)
@@ -115,6 +115,8 @@ public partial class MainWindow : Window
                 Opacity = 0;
                 Show();
             }
+
+            NativeWindowHelper.KeepAboveHost(this, hostBounds.WindowHandle);
 
             if (_hasQuotaSnapshot)
             {
@@ -197,9 +199,18 @@ public partial class MainWindow : Window
         {
             var client = _client;
             if (_closing || client is null || _visibleHostSamples < HostConfirmationSamples ||
-                !CodexHost.TryFindVisibleInputHostWindow(out _))
+                !CodexHost.TryFindDisplayableHostWindow(
+                    NativeWindowHelper.GetWindowHandle(this),
+                    out var hostBounds))
             {
                 Opacity = 0;
+                return;
+            }
+
+            if (hostBounds.HasImagePreviewOpen)
+            {
+                Opacity = 0;
+                Hide();
                 return;
             }
 
@@ -228,9 +239,18 @@ public partial class MainWindow : Window
 
         UpdateLayout();
         if (_visibleHostSamples < HostConfirmationSamples ||
-            !CodexHost.TryFindVisibleInputHostWindow(out var hostBounds))
+            !CodexHost.TryFindDisplayableHostWindow(
+                NativeWindowHelper.GetWindowHandle(this),
+                out var hostBounds))
         {
             Opacity = 0;
+            return;
+        }
+
+        if (hostBounds.HasImagePreviewOpen)
+        {
+            Opacity = 0;
+            Hide();
             return;
         }
 
@@ -293,12 +313,30 @@ public partial class MainWindow : Window
         {
             var composerLeft = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).X;
             var composerRight = DeviceToDip((int)Math.Round(composerRect.Right), (int)Math.Round(composerRect.Bottom)).X;
-            targetLeft = composerLeft + ComposerQuotaLeftOffsetDip;
-            minLeft = composerLeft;
-            maxLeft = composerRight - Width;
+            var composerWidth = composerRight - composerLeft;
+            if (Width <= composerWidth)
+            {
+                targetLeft = composerLeft + ComposerQuotaLeftOffsetDip;
+                minLeft = composerLeft;
+                maxLeft = composerRight - Width;
+            }
+            else
+            {
+                targetLeft = composerLeft + ((composerWidth - Width) / 2);
+            }
 
-            var composerBottom = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).Y;
-            Top = composerBottom - Height - ComposerBottomGapDip;
+            if (hostBounds.PlusRectPixels is { } composerPlusRect)
+            {
+                var plusCenter = DeviceToDip(
+                    (int)Math.Round((composerPlusRect.Left + composerPlusRect.Right) / 2),
+                    (int)Math.Round((composerPlusRect.Top + composerPlusRect.Bottom) / 2)).Y;
+                Top = plusCenter - (Height / 2);
+            }
+            else
+            {
+                var composerBottom = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).Y;
+                Top = composerBottom - Height - ComposerBottomGapDip;
+            }
         }
         else if (hostBounds.PlusRectPixels is { } plusRect)
         {
@@ -314,7 +352,8 @@ public partial class MainWindow : Window
             Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
         }
 
-        Left = Math.Clamp(targetLeft, minLeft, maxLeft);
+        Left = maxLeft < minLeft ? minLeft : Math.Clamp(targetLeft, minLeft, maxLeft);
+        NativeWindowHelper.KeepAboveHost(this, hostBounds.WindowHandle);
     }
 
     private Point DeviceToDip(int x, int y)
@@ -343,7 +382,10 @@ public partial class MainWindow : Window
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_closing || !IsVisible || !CodexHost.TryFindVisibleInputHostWindow(out var hostBounds))
+        if (_closing || !IsVisible ||
+            !CodexHost.TryFindDisplayableHostWindow(
+                NativeWindowHelper.GetWindowHandle(this),
+                out var hostBounds))
         {
             return;
         }

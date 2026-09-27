@@ -9,9 +9,12 @@ namespace CodexQuota;
 
 internal readonly record struct HostBounds(int Left, int Top, int Right, int Bottom)
 {
+    public nint WindowHandle { get; init; }
     public Rect? InputRectPixels { get; init; }
     public Rect? ComposerRectPixels { get; init; }
     public Rect? PlusRectPixels { get; init; }
+    public bool IsInputObscured { get; init; }
+    public bool HasImagePreviewOpen { get; init; }
 
     public long Area => (long)Math.Max(0, Right - Left) * Math.Max(0, Bottom - Top);
 }
@@ -21,6 +24,7 @@ internal static class CodexHost
     private const string DesktopProcessName = "ChatGPT";
     private const string CodexProcessName = "codex";
     private const string CodexHostProcessName = "codex-code-mode-host";
+    private const uint GwHwndPrev = 3;
 
     public static bool IsCodexRuntimePresent()
     {
@@ -99,14 +103,18 @@ internal static class CodexHost
         }
     }
 
-    public static bool TryFindVisibleHostWindow(out HostBounds bounds)
+    public static bool TryFindVisibleHostWindow(nint overlayWindowHandle, out HostBounds bounds)
     {
-        var candidates = new List<(nint Handle, uint ProcessId, HostBounds Bounds)>();
-        EnumWindows((handle, _) =>
+        HostBounds? firstVisibleHost = null;
+        HostBounds? firstObscuredInputHost = null;
+
+        for (var handle = GetTopWindow(nint.Zero);
+             handle != nint.Zero;
+             handle = GetWindow(handle, GwHwndNext))
         {
             if (!IsWindowVisible(handle) || IsIconic(handle))
             {
-                return true;
+                continue;
             }
 
             GetWindowThreadProcessId(handle, out var processId);
@@ -115,51 +123,65 @@ internal static class CodexHost
                 using var process = Process.GetProcessById((int)processId);
                 if (!string.Equals(process.ProcessName, DesktopProcessName, StringComparison.OrdinalIgnoreCase) || !GetWindowRect(handle, out var rect))
                 {
-                    return true;
+                    continue;
                 }
 
                 var candidate = new HostBounds(rect.Left, rect.Top, rect.Right, rect.Bottom);
                 if (candidate.Area >= 120_000)
                 {
-                candidates.Add((handle, processId, candidate));
+                    TryFindCodexLayout(
+                        handle,
+                        candidate,
+                        out var inputRectPixels,
+                        out var composerRectPixels,
+                        out var plusRectPixels,
+                        out var hasImagePreviewOpen);
+                    candidate = candidate with
+                    {
+                        WindowHandle = handle,
+                        InputRectPixels = inputRectPixels,
+                        ComposerRectPixels = composerRectPixels,
+                        PlusRectPixels = plusRectPixels,
+                        HasImagePreviewOpen = hasImagePreviewOpen
+                    };
+
+                    if (inputRectPixels is not null)
+                    {
+                        var visibleInputRect = composerRectPixels ?? inputRectPixels.Value;
+                        candidate = candidate with
+                        {
+                            IsInputObscured = IsRectObscuredByWindowAbove(
+                                handle,
+                                visibleInputRect,
+                                overlayWindowHandle)
+                        };
+
+                        if (!candidate.IsInputObscured)
+                        {
+                            bounds = candidate;
+                            return true;
+                        }
+
+                        firstObscuredInputHost ??= candidate;
+                    }
+
+                    firstVisibleHost ??= candidate;
                 }
             }
             catch (ArgumentException)
             {
             }
-
-            return true;
-        }, nint.Zero);
-
-        var foreground = GetForegroundWindow();
-        if (foreground == nint.Zero)
-        {
-            bounds = default;
-            return false;
         }
 
-        GetWindowThreadProcessId(foreground, out var foregroundProcessId);
-        var activeCandidates = candidates
-            .Where(candidate => candidate.Handle == foreground || candidate.ProcessId == foregroundProcessId)
-            .ToList();
-
-        if (activeCandidates.Count > 0)
+        if (firstObscuredInputHost is { } obscuredHost)
         {
-            var activeCandidate = activeCandidates.OrderByDescending(candidate => candidate.Bounds.Area).First();
-            bounds = activeCandidate.Bounds;
-            TryFindCodexLayout(
-                activeCandidate.Handle,
-                activeCandidate.Bounds,
-                out var inputRectPixels,
-                out var composerRectPixels,
-                out var plusRectPixels);
-            bounds = bounds with
-            {
-                InputRectPixels = inputRectPixels,
-                ComposerRectPixels = composerRectPixels,
-                PlusRectPixels = plusRectPixels
-            };
+            bounds = obscuredHost;
+            return true;
+        }
 
+        if (firstVisibleHost is { } visibleHost)
+        {
+            bounds = visibleHost;
             return true;
         }
 
@@ -167,9 +189,12 @@ internal static class CodexHost
         return false;
     }
 
-    public static bool TryFindVisibleInputHostWindow(out HostBounds bounds)
+    public static bool TryFindDisplayableHostWindow(nint overlayWindowHandle, out HostBounds bounds)
     {
-        if (!TryFindVisibleHostWindow(out bounds) || bounds.InputRectPixels is null)
+        if (!TryFindVisibleHostWindow(overlayWindowHandle, out bounds) ||
+            (!bounds.HasImagePreviewOpen &&
+             !IsHostWindowForeground(bounds.WindowHandle) &&
+             (bounds.InputRectPixels is null || bounds.IsInputObscured)))
         {
             bounds = default;
             return false;
@@ -178,20 +203,66 @@ internal static class CodexHost
         return true;
     }
 
+    private static bool IsHostWindowForeground(nint hostWindowHandle)
+    {
+        if (hostWindowHandle == nint.Zero)
+        {
+            return false;
+        }
+
+        var foregroundWindowHandle = GetForegroundWindow();
+        if (foregroundWindowHandle == nint.Zero)
+        {
+            return false;
+        }
+
+        GetWindowThreadProcessId(hostWindowHandle, out var hostProcessId);
+        GetWindowThreadProcessId(foregroundWindowHandle, out var foregroundProcessId);
+        return hostProcessId != 0 && hostProcessId == foregroundProcessId;
+    }
+
+    private static bool IsRectObscuredByWindowAbove(
+        nint hostWindowHandle,
+        Rect targetRect,
+        nint overlayWindowHandle)
+    {
+        for (var handle = GetWindow(hostWindowHandle, GwHwndPrev);
+             handle != nint.Zero;
+             handle = GetWindow(handle, GwHwndPrev))
+        {
+            if (handle == overlayWindowHandle || !IsWindowVisible(handle) || IsIconic(handle) ||
+                !GetWindowRect(handle, out var rect))
+            {
+                continue;
+            }
+
+            var windowRect = new Rect(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+            if (targetRect.IntersectsWith(windowRect))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void TryFindCodexLayout(
         nint hostHandle,
         HostBounds hostBounds,
         out Rect? inputRectPixels,
         out Rect? composerRectPixels,
-        out Rect? plusRectPixels)
+        out Rect? plusRectPixels,
+        out bool hasImagePreviewOpen)
     {
         inputRectPixels = null;
         composerRectPixels = null;
         plusRectPixels = null;
+        hasImagePreviewOpen = false;
 
         try
         {
             var root = AutomationElement.FromHandle(hostHandle);
+            hasImagePreviewOpen = HasLargeCenteredImage(root, hostBounds);
 
             var editCondition = new PropertyCondition(
                 AutomationElement.ControlTypeProperty,
@@ -260,6 +331,23 @@ internal static class CodexHost
         catch (InvalidOperationException)
         {
         }
+    }
+
+    private static bool HasLargeCenteredImage(AutomationElement root, HostBounds hostBounds)
+    {
+        var imageCondition = new PropertyCondition(
+            AutomationElement.ControlTypeProperty,
+            ControlType.Image);
+        var images = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, imageCondition));
+        var hostWidth = hostBounds.Right - hostBounds.Left;
+        var hostHeight = hostBounds.Bottom - hostBounds.Top;
+
+        return images.Any(image =>
+            image.Rect.Width >= Math.Max(280, hostWidth * 0.35) &&
+            image.Rect.Height >= Math.Max(150, hostHeight * 0.35) &&
+            image.Rect.Width * image.Rect.Height >= hostWidth * hostHeight * 0.12 &&
+            Math.Abs(image.Rect.Left + image.Rect.Width / 2 - (hostBounds.Left + hostWidth / 2)) <= hostWidth * 0.25 &&
+            Math.Abs(image.Rect.Top + image.Rect.Height / 2 - (hostBounds.Top + hostHeight / 2)) <= hostHeight * 0.25);
     }
 
     private static List<AutomationSnapshot> ReadAutomationSnapshots(AutomationElementCollection elements)
@@ -346,16 +434,14 @@ internal static class CodexHost
         Rect Rect,
         string ClassName);
 
-    private delegate bool EnumWindowsProc(nint windowHandle, nint parameter);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc callback, nint parameter);
-
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(nint windowHandle);
 
     [DllImport("user32.dll")]
     private static extern bool IsIconic(nint windowHandle);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(nint windowHandle, out uint processId);
@@ -364,7 +450,12 @@ internal static class CodexHost
     private static extern bool GetWindowRect(nint windowHandle, out NativeRect rect);
 
     [DllImport("user32.dll")]
-    private static extern nint GetForegroundWindow();
+    private static extern nint GetTopWindow(nint windowHandle);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetWindow(nint windowHandle, uint command);
+
+    private const uint GwHwndNext = 2;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeRect
@@ -379,9 +470,19 @@ internal static class CodexHost
 internal static class NativeWindowHelper
 {
     private const int GwlExStyle = -20;
+    private const uint GwHwndPrev = 3;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
     private const long WsExTransparent = 0x00000020L;
     private const long WsExToolWindow = 0x00000080L;
     private const long WsExNoActivate = 0x08000000L;
+    private static readonly nint HwndTop = nint.Zero;
+
+    public static nint GetWindowHandle(Window window)
+    {
+        return new WindowInteropHelper(window).Handle;
+    }
 
     public static void EnableClickThrough(Window window)
     {
@@ -390,9 +491,47 @@ internal static class NativeWindowHelper
         SetWindowLongPtr(handle, GwlExStyle, new nint(current | WsExTransparent | WsExToolWindow | WsExNoActivate));
     }
 
+    public static void KeepAboveHost(Window window, nint hostWindowHandle)
+    {
+        var handle = GetWindowHandle(window);
+        if (handle == nint.Zero || hostWindowHandle == nint.Zero)
+        {
+            return;
+        }
+
+        var insertAfter = GetWindow(hostWindowHandle, GwHwndPrev);
+        while (insertAfter == handle)
+        {
+            insertAfter = GetWindow(insertAfter, GwHwndPrev);
+        }
+
+        SetWindowPos(
+            handle,
+            insertAfter == nint.Zero ? HwndTop : insertAfter,
+            0,
+            0,
+            0,
+            0,
+            SwpNoMove | SwpNoSize | SwpNoActivate);
+    }
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
     private static extern nint GetWindowLongPtr(nint windowHandle, int index);
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern nint SetWindowLongPtr(nint windowHandle, int index, nint value);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetWindow(nint windowHandle, uint command);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        nint windowHandle,
+        nint insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
 }
