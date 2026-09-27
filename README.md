@@ -18,9 +18,9 @@ Codex 额度查询工具 / Read-only Codex quota monitor for Windows。
 
 ## 运行前提
 
-- Windows x64。
-- 需要安装 Microsoft .NET 10 Desktop Runtime。
-- 如果需要生成安装包，则 `build-codex-quota.exe` 还需要本机安装 .NET SDK，因为它会调用 `dotnet` 生成安装包。
+- Windows 11 x64 或 Windows 10 x64。
+- 运行最终安装包前无需预先安装 Microsoft .NET 10 Desktop Runtime；安装包检测不到时会使用包内的官方安装程序完成安装。
+- 如果需要生成安装包，`build-codex-quota.exe` 需要本机安装 .NET SDK；当本机没有 Runtime 缓存时，首次打包还需要联网下载官方 .NET 10 Desktop Runtime，之后会复用缓存并将其嵌入最终安装包，用户安装时无需再次下载。
 
 ## 安全边界
 

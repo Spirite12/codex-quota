@@ -18,9 +18,9 @@ If the account has no 5H limit, the 5H capsule is hidden and the 1W capsule move
 
 ## Requirements
 
-- Windows x64.
-- Microsoft .NET 10 Desktop Runtime.
-- To generate an installer, `build-codex-quota.exe` also requires the .NET SDK because it invokes `dotnet` to build the installer.
+- Windows 11 x64 or Windows 10 x64.
+- The final installer does not require Microsoft .NET 10 Desktop Runtime to be pre-installed; if it is missing, the installer uses the official installer bundled inside the package.
+- To generate an installer, `build-codex-quota.exe` requires the .NET SDK to be installed locally; if the local Runtime cache is absent, the first packaging run also requires an internet connection to download the official .NET 10 Desktop Runtime. Subsequent runs reuse the cache and embed it into the final installer, so users do not need to download it again during installation.
 
 ## Security Boundaries
 
