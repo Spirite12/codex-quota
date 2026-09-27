@@ -38,6 +38,7 @@
                 <Ellipse x:Name="FiveHourDot" Width="7" Height="7" Fill="#B5BECA" Margin="0,0,6,0" />
                 <TextBlock x:Name="FiveHourLabel" Text="5H：" Foreground="#667085" FontSize="12" FontWeight="SemiBold" />
                 <TextBlock x:Name="FiveHourValue" Text="—" Foreground="#344054" FontSize="12" FontWeight="SemiBold" Margin="0" />
+                <TextBlock x:Name="FiveHourResetInfo" Foreground="#667085" FontSize="12" FontWeight="SemiBold" Margin="5,0,0,0" Visibility="Collapsed" />
             </StackPanel>
         </Border>
 
@@ -53,6 +54,7 @@
                 <Ellipse x:Name="WeekDot" Width="7" Height="7" Fill="#B5BECA" Margin="0,0,6,0" />
                 <TextBlock x:Name="WeekLabel" Text="1W：" Foreground="#667085" FontSize="12" FontWeight="SemiBold" />
                 <TextBlock x:Name="WeekValue" Text="—" Foreground="#344054" FontSize="12" FontWeight="SemiBold" Margin="0" />
+                <TextBlock x:Name="WeekResetInfo" Foreground="#667085" FontSize="12" FontWeight="SemiBold" Margin="5,0,0,0" Visibility="Collapsed" />
             </StackPanel>
         </Border>
     </Grid>
