@@ -16,6 +16,15 @@ This is a read-only Windows quota monitor. It displays the 5H and 1W (weekly) qu
 
 If the account has no 5H limit, the 5H capsule is hidden and the 1W capsule moves to the original 5H position.
 
+## Expiry Hints
+
+Expiry hints appear to the right of the percentage inside each quota capsule and follow that capsule's existing visibility rules. A hint is shown only when the quota response includes a reset time. If it is missing, the percentage remains visible without an expiry hint.
+
+- **5H**: Shows the local reset time, such as `12:00`, when the reset is in 1 hour or less, or when less than 20% remains.
+- **1W**: Shows a hint when the reset is in 5 hours or less, more than 5 but no more than 24 hours away, or less than 20% remains. Once triggered, it shows the exact time when the reset is in 4 hours or less; otherwise it shows `Today` for a reset later today, `Tomorrow` for a reset tomorrow, or the month and day (for example, `9.21`) for a later date. The exact time takes priority over the day or date label.
+- All stated time boundaries are inclusive (1, 5, 24, and 4 hours); the quota threshold is strictly below 20%.
+- At 0% remaining, the existing behavior is preserved: when a reset time is available, 5H shows the reset time and 1W shows the reset date in place of the percentage. Without a reset time, the percentage remains visible.
+
 ## Requirements
 
 - Windows 11 x64 or Windows 10 x64.
