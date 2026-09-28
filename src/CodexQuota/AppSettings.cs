@@ -3,9 +3,9 @@ using System.IO;
 
 namespace CodexQuota;
 
-internal sealed record AppSettings(int FallbackRefreshSeconds, int HostPollSeconds, int BottomInsetPixels)
+internal sealed record AppSettings(int FallbackRefreshSeconds, double HostPollSeconds, int BottomInsetPixels)
 {
-    public static AppSettings Default { get; } = new(120, 1, 24);
+    public static AppSettings Default { get; } = new(120, 0.6, 24);
 
     public static AppSettings Load()
     {
@@ -27,7 +27,7 @@ internal sealed record AppSettings(int FallbackRefreshSeconds, int HostPollSecon
 
         return new AppSettings(
             Math.Clamp(settings.FallbackRefreshSeconds, 60, 3600),
-            Math.Clamp(settings.HostPollSeconds, 1, 10),
+            Math.Clamp(settings.HostPollSeconds, 0.6, 10),
             Math.Clamp(settings.BottomInsetPixels, 16, 160));
         }
         catch (JsonException)

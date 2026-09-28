@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.ComponentModel;
 using System.Windows.Threading;
+using CodexQuota.Localization;
 
 namespace CodexQuota;
 
@@ -15,10 +16,12 @@ public partial class MainWindow : Window
     private const double VerticalNudgeDip = 2;
     private readonly DispatcherTimer _hostTimer = new();
     private readonly DispatcherTimer _fallbackRefreshTimer = new();
+    private readonly DispatcherTimer _quotaDisplayTimer = new();
     private readonly SemaphoreSlim _hostCheckGate = new(1, 1);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private AppSettings _settings = AppSettings.Default;
     private CodexAppServerClient? _client;
+    private QuotaSet? _latestQuotas;
     private bool _hasQuotaSnapshot;
     private int _visibleHostSamples;
     private int _missingHostSamples;
@@ -27,6 +30,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        FiveHourLabel.Text = UiText.T("5H：", "5H:");
+        WeekLabel.Text = UiText.T("1W：", "1W:");
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -39,6 +44,9 @@ public partial class MainWindow : Window
 
         _fallbackRefreshTimer.Interval = TimeSpan.FromSeconds(_settings.FallbackRefreshSeconds);
         _fallbackRefreshTimer.Tick += FallbackRefreshTimer_Tick;
+
+        _quotaDisplayTimer.Interval = TimeSpan.FromSeconds(1);
+        _quotaDisplayTimer.Tick += QuotaDisplayTimer_Tick;
 
         await EnsureHostAndStartAsync();
         if (!_closing)
@@ -57,6 +65,16 @@ public partial class MainWindow : Window
         await RefreshQuotasAsync();
     }
 
+    private void QuotaDisplayTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_latestQuotas is not { } quotas)
+        {
+            return;
+        }
+
+        UpdateQuotaValues(quotas, updateColors: false);
+    }
+
     private async Task EnsureHostAndStartAsync()
     {
         if (_closing || !await _hostCheckGate.WaitAsync(0))
@@ -71,7 +89,9 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (!CodexHost.TryFindVisibleHostWindow(out var hostBounds))
+            if (!CodexHost.TryFindDisplayableHostWindow(
+                    NativeWindowHelper.GetWindowHandle(this),
+                    out var hostBounds))
             {
                 _visibleHostSamples = 0;
                 _missingHostSamples = Math.Min(_missingHostSamples + 1, HostConfirmationSamples);
@@ -86,18 +106,16 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (hostBounds.InputRectPixels is null)
+            _missingHostSamples = 0;
+            _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
+
+            if (hostBounds.HasImagePreviewOpen)
             {
-                _visibleHostSamples = 0;
-                _missingHostSamples = 0;
-                _fallbackRefreshTimer.Stop();
                 Opacity = 0;
                 Hide();
                 return;
             }
 
-            _missingHostSamples = 0;
-            _visibleHostSamples = Math.Min(_visibleHostSamples + 1, HostConfirmationSamples);
             PositionAgainstHost(hostBounds);
 
             if (_visibleHostSamples < HostConfirmationSamples)
@@ -111,6 +129,8 @@ public partial class MainWindow : Window
                 Opacity = 0;
                 Show();
             }
+
+            NativeWindowHelper.KeepAboveHost(this, hostBounds.WindowHandle);
 
             if (_hasQuotaSnapshot)
             {
@@ -193,9 +213,18 @@ public partial class MainWindow : Window
         {
             var client = _client;
             if (_closing || client is null || _visibleHostSamples < HostConfirmationSamples ||
-                !CodexHost.TryFindVisibleInputHostWindow(out _))
+                !CodexHost.TryFindDisplayableHostWindow(
+                    NativeWindowHelper.GetWindowHandle(this),
+                    out var hostBounds))
             {
                 Opacity = 0;
+                return;
+            }
+
+            if (hostBounds.HasImagePreviewOpen)
+            {
+                Opacity = 0;
+                Hide();
                 return;
             }
 
@@ -214,19 +243,34 @@ public partial class MainWindow : Window
 
     private void ApplyQuotas(QuotaSet quotas)
     {
+        _latestQuotas = quotas;
+        UpdateQuotaValues(quotas, updateColors: true);
+
         var fiveHour = quotas.FiveHour;
-        SetChip(FiveHourValue, FiveHourDot, fiveHour);
         FiveHourChip.Visibility = fiveHour is null ? Visibility.Collapsed : Visibility.Visible;
         ChipGapColumn.Width = fiveHour is null ? new GridLength(0) : new GridLength(6);
         System.Windows.Controls.Grid.SetColumn(WeekChip, fiveHour is null ? 0 : 2);
-        SetChip(WeekValue, WeekDot, quotas.Week);
         _hasQuotaSnapshot = true;
+
+        if (!_quotaDisplayTimer.IsEnabled)
+        {
+            _quotaDisplayTimer.Start();
+        }
 
         UpdateLayout();
         if (_visibleHostSamples < HostConfirmationSamples ||
-            !CodexHost.TryFindVisibleInputHostWindow(out var hostBounds))
+            !CodexHost.TryFindDisplayableHostWindow(
+                NativeWindowHelper.GetWindowHandle(this),
+                out var hostBounds))
         {
             Opacity = 0;
+            return;
+        }
+
+        if (hostBounds.HasImagePreviewOpen)
+        {
+            Opacity = 0;
+            Hide();
             return;
         }
 
@@ -234,17 +278,64 @@ public partial class MainWindow : Window
         Opacity = 1;
     }
 
-    private static void SetChip(System.Windows.Controls.TextBlock value, System.Windows.Shapes.Ellipse dot, QuotaWindow? quota)
+    private void UpdateQuotaValues(QuotaSet quotas, bool updateColors)
+    {
+        var now = DateTimeOffset.Now;
+        SetChip(
+            FiveHourValue,
+            FiveHourResetInfo,
+            FiveHourDot,
+            quotas.FiveHour,
+            isWeek: false,
+            now: now,
+            updateColors: updateColors);
+        SetChip(
+            WeekValue,
+            WeekResetInfo,
+            WeekDot,
+            quotas.Week,
+            isWeek: true,
+            now: now,
+            updateColors: updateColors);
+    }
+
+    private static void SetChip(
+        System.Windows.Controls.TextBlock value,
+        System.Windows.Controls.TextBlock resetInfo,
+        System.Windows.Shapes.Ellipse dot,
+        QuotaWindow? quota,
+        bool isWeek,
+        DateTimeOffset now,
+        bool updateColors)
     {
         if (quota is null)
         {
             value.Text = "—";
-            dot.Fill = new SolidColorBrush(Color.FromRgb(181, 190, 202));
+            resetInfo.Text = string.Empty;
+            resetInfo.Visibility = Visibility.Collapsed;
+            if (updateColors)
+            {
+                dot.Fill = new SolidColorBrush(Color.FromRgb(181, 190, 202));
+            }
             return;
         }
 
-        value.Text = $"{quota.Value.RemainingPercent}%";
-        dot.Fill = new SolidColorBrush(GetQuotaColor(quota.Value.RemainingPercent));
+        var display = QuotaDisplayFormatter.Format(quota.Value, isWeek, now);
+        if (value.Text != display.Value)
+        {
+            value.Text = display.Value;
+        }
+
+        if (resetInfo.Text != display.ResetInfo)
+        {
+            resetInfo.Text = display.ResetInfo;
+        }
+
+        resetInfo.Visibility = string.IsNullOrEmpty(display.ResetInfo) ? Visibility.Collapsed : Visibility.Visible;
+        if (updateColors)
+        {
+            dot.Fill = new SolidColorBrush(GetQuotaColor(quota.Value.RemainingPercent));
+        }
     }
 
     private static Color GetQuotaColor(int remainingPercent)
@@ -268,12 +359,30 @@ public partial class MainWindow : Window
         {
             var composerLeft = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).X;
             var composerRight = DeviceToDip((int)Math.Round(composerRect.Right), (int)Math.Round(composerRect.Bottom)).X;
-            targetLeft = composerLeft + ComposerQuotaLeftOffsetDip;
-            minLeft = composerLeft;
-            maxLeft = composerRight - Width;
+            var composerWidth = composerRight - composerLeft;
+            if (Width <= composerWidth)
+            {
+                targetLeft = composerLeft + ComposerQuotaLeftOffsetDip;
+                minLeft = composerLeft;
+                maxLeft = composerRight - Width;
+            }
+            else
+            {
+                targetLeft = composerLeft + ((composerWidth - Width) / 2);
+            }
 
-            var composerBottom = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).Y;
-            Top = composerBottom - Height - ComposerBottomGapDip;
+            if (hostBounds.PlusRectPixels is { } composerPlusRect)
+            {
+                var plusCenter = DeviceToDip(
+                    (int)Math.Round((composerPlusRect.Left + composerPlusRect.Right) / 2),
+                    (int)Math.Round((composerPlusRect.Top + composerPlusRect.Bottom) / 2)).Y;
+                Top = plusCenter - (Height / 2);
+            }
+            else
+            {
+                var composerBottom = DeviceToDip((int)Math.Round(composerRect.Left), (int)Math.Round(composerRect.Bottom)).Y;
+                Top = composerBottom - Height - ComposerBottomGapDip;
+            }
         }
         else if (hostBounds.PlusRectPixels is { } plusRect)
         {
@@ -289,7 +398,8 @@ public partial class MainWindow : Window
             Top = hostBottomLeft.Y - _settings.BottomInsetPixels - Height - VerticalNudgeDip;
         }
 
-        Left = Math.Clamp(targetLeft, minLeft, maxLeft);
+        Left = maxLeft < minLeft ? minLeft : Math.Clamp(targetLeft, minLeft, maxLeft);
+        NativeWindowHelper.KeepAboveHost(this, hostBounds.WindowHandle);
     }
 
     private Point DeviceToDip(int x, int y)
@@ -308,6 +418,7 @@ public partial class MainWindow : Window
         _closing = true;
         _hostTimer.Stop();
         _fallbackRefreshTimer.Stop();
+        _quotaDisplayTimer.Stop();
 
         var client = Interlocked.Exchange(ref _client, null);
         if (client is not null)
@@ -318,7 +429,10 @@ public partial class MainWindow : Window
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_closing || !IsVisible || !CodexHost.TryFindVisibleInputHostWindow(out var hostBounds))
+        if (_closing || !IsVisible ||
+            !CodexHost.TryFindDisplayableHostWindow(
+                NativeWindowHelper.GetWindowHandle(this),
+                out var hostBounds))
         {
             return;
         }
@@ -334,6 +448,7 @@ public partial class MainWindow : Window
         }
 
         _fallbackRefreshTimer.Stop();
+        _quotaDisplayTimer.Stop();
 
         var client = Interlocked.Exchange(ref _client, null);
         if (client is not null)
@@ -344,6 +459,7 @@ public partial class MainWindow : Window
         _visibleHostSamples = 0;
         _missingHostSamples = 0;
         _hasQuotaSnapshot = false;
+        _latestQuotas = null;
         Opacity = 0;
         Hide();
     }
