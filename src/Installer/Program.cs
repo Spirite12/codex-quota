@@ -202,7 +202,7 @@ internal static class Program
             }
 
             key.SetValue("DisplayName", "Codex Quota", RegistryValueKind.String);
-            key.SetValue("DisplayVersion", "0.1.0", RegistryValueKind.String);
+            key.SetValue("DisplayVersion", typeof(Program).Assembly.GetName().Version!.ToString(3), RegistryValueKind.String);
             key.SetValue("Publisher", "Codex Quota", RegistryValueKind.String);
             key.SetValue("InstallLocation", installRoot, RegistryValueKind.String);
             key.SetValue("UninstallString", $"\"{uninstallerPath}\"", RegistryValueKind.String);
