@@ -1,5 +1,4 @@
 {
-  "fallbackRefreshSeconds": 120,
-  "hostPollSeconds": 0.6,
-  "bottomInsetPixels": 24
+  "fallbackRefreshSeconds": 60,
+  "hostPollSeconds": 0.6
 }

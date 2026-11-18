@@ -10,11 +10,8 @@ namespace CodexQuota;
 internal readonly record struct HostBounds(int Left, int Top, int Right, int Bottom)
 {
     public nint WindowHandle { get; init; }
-    public Rect? InputRectPixels { get; init; }
-    public Rect? ComposerRectPixels { get; init; }
-    public Rect? PlusRectPixels { get; init; }
-    public bool IsInputObscured { get; init; }
-    public bool HasImagePreviewOpen { get; init; }
+    public Rect? SidebarAnchorRectPixels { get; init; }
+    public bool HasModalDialog { get; init; }
 
     public long Area => (long)Math.Max(0, Right - Left) * Math.Max(0, Bottom - Top);
 }
@@ -103,10 +100,10 @@ internal static class CodexHost
         }
     }
 
-    public static bool TryFindVisibleHostWindow(nint overlayWindowHandle, out HostBounds bounds)
+    public static bool TryFindDisplayableHostWindow(nint overlayWindowHandle, out HostBounds bounds)
     {
         HostBounds? firstVisibleHost = null;
-        HostBounds? firstObscuredInputHost = null;
+        HostBounds? firstObscuredAnchorHost = null;
 
         for (var handle = GetTopWindow(nint.Zero);
              handle != nint.Zero;
@@ -132,37 +129,31 @@ internal static class CodexHost
                     TryFindCodexLayout(
                         handle,
                         candidate,
-                        out var inputRectPixels,
-                        out var composerRectPixels,
-                        out var plusRectPixels,
-                        out var hasImagePreviewOpen);
+                        out var sidebarAnchorRectPixels,
+                        out var hasModalDialog);
                     candidate = candidate with
                     {
                         WindowHandle = handle,
-                        InputRectPixels = inputRectPixels,
-                        ComposerRectPixels = composerRectPixels,
-                        PlusRectPixels = plusRectPixels,
-                        HasImagePreviewOpen = hasImagePreviewOpen
+                        SidebarAnchorRectPixels = sidebarAnchorRectPixels,
+                        HasModalDialog = hasModalDialog
                     };
 
-                    if (inputRectPixels is not null)
+                    if (candidate.HasModalDialog && IsHostWindowForeground(handle))
                     {
-                        var visibleInputRect = composerRectPixels ?? inputRectPixels.Value;
-                        candidate = candidate with
-                        {
-                            IsInputObscured = IsRectObscuredByWindowAbove(
-                                handle,
-                                visibleInputRect,
-                                overlayWindowHandle)
-                        };
+                        bounds = candidate;
+                        return true;
+                    }
 
-                        if (!candidate.IsInputObscured)
+                    if (sidebarAnchorRectPixels is not null)
+                    {
+                        if (!IsRectObscuredByWindowAbove(
+                                handle, sidebarAnchorRectPixels.Value, overlayWindowHandle))
                         {
                             bounds = candidate;
                             return true;
                         }
 
-                        firstObscuredInputHost ??= candidate;
+                        firstObscuredAnchorHost ??= candidate;
                     }
 
                     firstVisibleHost ??= candidate;
@@ -173,7 +164,7 @@ internal static class CodexHost
             }
         }
 
-        if (firstObscuredInputHost is { } obscuredHost)
+        if (firstObscuredAnchorHost is { } obscuredHost)
         {
             bounds = obscuredHost;
             return true;
@@ -187,20 +178,6 @@ internal static class CodexHost
 
         bounds = default;
         return false;
-    }
-
-    public static bool TryFindDisplayableHostWindow(nint overlayWindowHandle, out HostBounds bounds)
-    {
-        if (!TryFindVisibleHostWindow(overlayWindowHandle, out bounds) ||
-            (!bounds.HasImagePreviewOpen &&
-             !IsHostWindowForeground(bounds.WindowHandle) &&
-             (bounds.InputRectPixels is null || bounds.IsInputObscured)))
-        {
-            bounds = default;
-            return false;
-        }
-
-        return true;
     }
 
     private static bool IsHostWindowForeground(nint hostWindowHandle)
@@ -249,78 +226,56 @@ internal static class CodexHost
     private static void TryFindCodexLayout(
         nint hostHandle,
         HostBounds hostBounds,
-        out Rect? inputRectPixels,
-        out Rect? composerRectPixels,
-        out Rect? plusRectPixels,
-        out bool hasImagePreviewOpen)
+        out Rect? sidebarAnchorRectPixels,
+        out bool hasModalDialog)
     {
-        inputRectPixels = null;
-        composerRectPixels = null;
-        plusRectPixels = null;
-        hasImagePreviewOpen = false;
+        sidebarAnchorRectPixels = null;
+        hasModalDialog = false;
 
         try
         {
             var root = AutomationElement.FromHandle(hostHandle);
-            hasImagePreviewOpen = HasLargeCenteredImage(root, hostBounds);
-
-            var editCondition = new PropertyCondition(
-                AutomationElement.ControlTypeProperty,
-                ControlType.Edit);
-            var editCandidates = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, editCondition));
-            var edit = editCandidates
-                .Where(candidate =>
-                    candidate.Rect.Width >= 240 &&
-                    candidate.Rect.Left >= hostBounds.Left &&
-                    candidate.Rect.Right <= hostBounds.Right + 40 &&
-                    candidate.Rect.Bottom >= hostBounds.Bottom - 300 &&
-                    candidate.Rect.Bottom <= hostBounds.Bottom + 20)
-                .OrderByDescending(candidate => candidate.ClassName.Contains("ProseMirror", StringComparison.OrdinalIgnoreCase))
-                .ThenByDescending(candidate => candidate.Rect.Width)
-                .ThenByDescending(candidate => candidate.Rect.Bottom)
-                .FirstOrDefault();
-
-            if (edit.Element is null)
+            var dialogs = root.FindAll(TreeScope.Descendants, new PropertyCondition(
+                AutomationElement.ControlTypeProperty, ControlType.Window));
+            foreach (AutomationElement dialog in dialogs)
             {
-                return;
+                var current = dialog.Current;
+                if (!current.IsOffscreen && !current.BoundingRectangle.IsEmpty)
+                {
+                    hasModalDialog = true;
+                    break;
+                }
             }
 
-            inputRectPixels = edit.Rect;
-
-            if (TryFindComposerContainer(
-                    edit.Element,
-                    edit.Rect,
-                    hostBounds,
-                    out var composerRect))
+            Rect? profileRectPixels = null;
+            var sidebarButtons = root.FindAll(TreeScope.Descendants, new PropertyCondition(
+                AutomationElement.ControlTypeProperty, ControlType.Button));
+            foreach (AutomationElement button in sidebarButtons)
             {
-                composerRectPixels = composerRect;
-            }
+                var current = button.Current;
+                var rect = current.BoundingRectangle;
+                if (!current.IsOffscreen &&
+                    rect.Width is >= 20 and <= 80 && rect.Height is >= 20 and <= 80 &&
+                    rect.Left >= hostBounds.Left && rect.Right <= hostBounds.Left + 120 &&
+                    rect.Bottom >= hostBounds.Bottom - 200 && rect.Bottom <= hostBounds.Bottom)
+                {
+                    if (string.Equals(current.Name, "用量", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(current.Name, "Usage", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sidebarAnchorRectPixels = rect;
+                        break;
+                    }
 
-            var buttonCondition = new PropertyCondition(
-                AutomationElement.ControlTypeProperty,
-                ControlType.Button);
-            var buttonCandidates = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, buttonCondition));
-            var bottomReference = composerRectPixels?.Bottom ?? hostBounds.Bottom;
-            var leftReference = composerRectPixels?.Left ?? inputRectPixels.Value.Left;
-            var plus = buttonCandidates
-                .Where(candidate =>
-                    candidate.Rect.Width is >= 20 and <= 48 &&
-                    candidate.Rect.Height is >= 20 and <= 48 &&
-                    candidate.Rect.Left >= hostBounds.Left &&
-                    candidate.Rect.Right <= hostBounds.Right + 20 &&
-                    candidate.Rect.Left >= leftReference - 24 &&
-                    candidate.Rect.Left <= leftReference + 160 &&
-                    candidate.Rect.Bottom >= bottomReference - 100 &&
-                    candidate.Rect.Bottom <= hostBounds.Bottom + 20)
-                .OrderByDescending(candidate => candidate.ClassName.Contains("aspect-square", StringComparison.OrdinalIgnoreCase))
-                .ThenBy(candidate => Math.Abs(candidate.Rect.Left - leftReference))
-                .ThenByDescending(candidate => candidate.Rect.Bottom)
-                .FirstOrDefault();
-
-            if (plus.Element is not null)
-            {
-                plusRectPixels = plus.Rect;
+                    if (string.Equals(current.Name, "打开个人资料菜单", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(current.Name, "Open profile menu", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(current.Name, "Open account menu", StringComparison.OrdinalIgnoreCase))
+                    {
+                        profileRectPixels = rect;
+                    }
+                }
             }
+            sidebarAnchorRectPixels ??= profileRectPixels;
+
         }
         catch (ElementNotAvailableException)
         {
@@ -332,107 +287,6 @@ internal static class CodexHost
         {
         }
     }
-
-    private static bool HasLargeCenteredImage(AutomationElement root, HostBounds hostBounds)
-    {
-        var imageCondition = new PropertyCondition(
-            AutomationElement.ControlTypeProperty,
-            ControlType.Image);
-        var images = ReadAutomationSnapshots(root.FindAll(TreeScope.Descendants, imageCondition));
-        var hostWidth = hostBounds.Right - hostBounds.Left;
-        var hostHeight = hostBounds.Bottom - hostBounds.Top;
-
-        return images.Any(image =>
-            image.Rect.Width >= Math.Max(280, hostWidth * 0.35) &&
-            image.Rect.Height >= Math.Max(150, hostHeight * 0.35) &&
-            image.Rect.Width * image.Rect.Height >= hostWidth * hostHeight * 0.12 &&
-            Math.Abs(image.Rect.Left + image.Rect.Width / 2 - (hostBounds.Left + hostWidth / 2)) <= hostWidth * 0.25 &&
-            Math.Abs(image.Rect.Top + image.Rect.Height / 2 - (hostBounds.Top + hostHeight / 2)) <= hostHeight * 0.25);
-    }
-
-    private static List<AutomationSnapshot> ReadAutomationSnapshots(AutomationElementCollection elements)
-    {
-        var snapshots = new List<AutomationSnapshot>(elements.Count);
-        foreach (AutomationElement element in elements)
-        {
-            try
-            {
-                var current = element.Current;
-                var rect = current.BoundingRectangle;
-                if (!current.IsOffscreen && rect.Width > 0 && rect.Height > 0)
-                {
-                    snapshots.Add(new AutomationSnapshot(
-                        element,
-                        rect,
-                        current.ClassName));
-                }
-            }
-            catch (ElementNotAvailableException)
-            {
-            }
-            catch (COMException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        }
-
-        return snapshots;
-    }
-
-    private static bool TryFindComposerContainer(
-        AutomationElement edit,
-        Rect editRect,
-        HostBounds hostBounds,
-        out Rect composerRect)
-    {
-        var walker = TreeWalker.RawViewWalker;
-        var current = walker.GetParent(edit);
-        for (var level = 0; level < 8 && current is not null; level++)
-        {
-            try
-            {
-                var snapshot = current.Current;
-                var rect = snapshot.BoundingRectangle;
-                if (!snapshot.IsOffscreen &&
-                    rect.Width > editRect.Width + 16 &&
-                    rect.Width <= editRect.Width + 240 &&
-                    rect.Height > editRect.Height + 30 &&
-                    rect.Height <= 260 &&
-                    rect.Left <= editRect.Left &&
-                    rect.Right >= editRect.Right &&
-                    rect.Bottom >= hostBounds.Bottom - 300 &&
-                    rect.Bottom <= hostBounds.Bottom + 20)
-                {
-                    composerRect = rect;
-                    return true;
-                }
-
-                current = walker.GetParent(current);
-            }
-            catch (ElementNotAvailableException)
-            {
-                break;
-            }
-            catch (COMException)
-            {
-                break;
-            }
-            catch (InvalidOperationException)
-            {
-                break;
-            }
-        }
-
-        composerRect = default;
-        return false;
-    }
-
-    private readonly record struct AutomationSnapshot(
-        AutomationElement? Element,
-        Rect Rect,
-        string ClassName);
 
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(nint windowHandle);
@@ -470,6 +324,7 @@ internal static class CodexHost
 internal static class NativeWindowHelper
 {
     private const int GwlExStyle = -20;
+    private const uint EventSystemForeground = 0x0003;
     private const uint GwHwndPrev = 3;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
@@ -478,6 +333,25 @@ internal static class NativeWindowHelper
     private const long WsExToolWindow = 0x00000080L;
     private const long WsExNoActivate = 0x08000000L;
     private static readonly nint HwndTop = nint.Zero;
+
+    public delegate void ForegroundChangedCallback(nint hook, uint eventType, nint windowHandle,
+        int objectId, int childId, uint eventThread, uint eventTime);
+
+    public static nint WatchForegroundChanges(ForegroundChangedCallback callback) =>
+        SetWinEventHook(EventSystemForeground, EventSystemForeground, nint.Zero, callback, 0, 0, 0);
+
+    public static void StopWatchingForegroundChanges(nint hook)
+    {
+        if (hook != nint.Zero)
+        {
+            UnhookWinEvent(hook);
+        }
+    }
+
+    public static bool IsVisibleHost(nint handle) =>
+        handle != nint.Zero && IsWindowVisible(handle) && !IsIconic(handle);
+
+    public static nint GetForegroundWindowHandle() => GetForegroundWindow();
 
     public static nint GetWindowHandle(Window window)
     {
@@ -520,6 +394,25 @@ internal static class NativeWindowHelper
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern nint SetWindowLongPtr(nint windowHandle, int index, nint value);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetWinEventHook(uint eventMin, uint eventMax, nint module,
+        ForegroundChangedCallback callback, uint processId, uint threadId, uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnhookWinEvent(nint hook);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(nint handle);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(nint handle);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
 
     [DllImport("user32.dll")]
     private static extern nint GetWindow(nint windowHandle, uint command);

@@ -11,6 +11,9 @@ internal static class QuotaDisplayFormatter
     private static readonly TimeSpan FiveHours = TimeSpan.FromHours(5);
     private static readonly TimeSpan OneDay = TimeSpan.FromDays(1);
 
+    public static string FormatLabel(string name, string resetInfo) =>
+        string.IsNullOrEmpty(resetInfo) ? name : name + ": " + resetInfo;
+
     public static QuotaDisplayValue Format(QuotaWindow? quota, bool isWeek, DateTimeOffset now)
     {
         if (quota is not QuotaWindow currentQuota)
@@ -82,7 +85,7 @@ internal static class QuotaDisplayFormatter
     {
         return isWeek
             ? UiText.T(
-                $"{resetAt.Month}月{resetAt.Day}日",
+                $"{resetAt.Month}.{resetAt.Day}",
                 resetAt.ToString("MMM d", CultureInfo.CurrentUICulture))
             : FormatTime(resetAt);
     }

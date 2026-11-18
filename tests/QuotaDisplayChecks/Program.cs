@@ -25,7 +25,7 @@ var checks = new (string Name, QuotaWindow Quota, bool IsWeek, DateTimeOffset No
     ("1W 低于20%且今天4小时内到期", Window(19, now.AddHours(3)), true, now, "19%", "13:00"),
     ("1W 恰好20%且超过一天", Window(20, now.AddDays(3)), true, now, "20%", string.Empty),
     ("5H 到0沿用旧规则", Window(0, now.AddHours(2)), false, now, "12:00", string.Empty),
-    ("1W 到0沿用旧规则", Window(0, now.AddDays(3)), true, now, $"{futureDate.Month}月{futureDate.Day}日", string.Empty)
+    ("1W 到0显示月日", Window(0, now.AddDays(3)), true, now, $"{futureDate.Month}.{futureDate.Day}", string.Empty)
 };
 
 foreach (var check in checks)
@@ -45,7 +45,14 @@ if (missingReset.Value != "19%" || !string.IsNullOrEmpty(missingReset.ResetInfo)
     return 1;
 }
 
-Console.WriteLine($"额度胶囊显示检查通过：{checks.Length + 1} 项。");
+if (QuotaDisplayFormatter.FormatLabel("1W", "今日") != "1W: 今日" ||
+    QuotaDisplayFormatter.FormatLabel("5H", string.Empty) != "5H")
+{
+    Console.Error.WriteLine("中文标签的冒号或空提示显示不正确。");
+    return 1;
+}
+
+Console.WriteLine($"额度显示检查通过：{checks.Length + 3} 项。");
 return 0;
 
 static QuotaWindow Window(int remainingPercent, DateTimeOffset resetAt)
